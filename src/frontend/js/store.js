@@ -22,7 +22,7 @@ const DEFAULTS = () => ({
   bosses: 0,   // bosses defeated
   badges: [],  // trophy ids unlocked
   quests: [],  // the current quest board (each quest carries its own secs)
-  foe: 0,     // which boss (index into NAMES) is on the board
+  foe: 0,     // boards cleared so far; Clawd wakes again each time
   nextId: 1,   // id for the next quest added
 });
 

@@ -1,10 +1,21 @@
 // ---------------------------------------------------------------------------
-// The three.js scene: arena, procedural monsters, hit and death reactions.
+// The stage: the three.js arena (stars, rings, hit sparks) around Clawd —
+// Claude Code — rendered as a big 3D pixel-art figure: pixel maps matching
+// the clawd-on-desk pet, extruded into chunky voxels, standing on the disc.
 //
-// Everything lives inside one IIFE and is exposed as a tiny public API:
-//   BOSS.set(foeIndex, hpFraction, dead, dormant) — sync with game state
-//   BOSS.hit(big)  — big = heavy hit (round finish / big quest)
-//   BOSS.win()     — board cleared celebration
+// Pixel-art versions, one per game state:
+//   doze  — the board is empty: shut-lid eyes, he sleeps until a quest wakes him
+//   wake  — short cameo when the first quest appears: sparks pop around him
+//   idle  — quests on the board, nothing running: tall black eyes
+//   work  — a chronometer is running: eyes down on the code, typing jitter
+//   happy — the board was just cleared: grin with a tooth, jumping
+//   dizzy — defeated: sparks orbit his head while he spins, until the next
+//           quest arrives
+//
+// Public API:
+//   BOSS.set(foe, hpFraction, dead, dormant) — sync with game state
+//   BOSS.hit(big) — big = heavy hit (long-worked quest)
+//   BOSS.win()    — board cleared celebration
 // ---------------------------------------------------------------------------
 
 const BOSS = (() => {
@@ -58,6 +69,7 @@ const BOSS = (() => {
   // --- Arena ----------------------------------------------------------------
 
   // Purple floor ring, a faint larger pink ring around it, and a soft disc inside.
+  // Clawd stands in the middle, feet on the disc.
   const ring = new THREE.Mesh(
     new THREE.TorusGeometry(2.6, 0.04, 12, 80),
     new THREE.MeshBasicMaterial({ color: 0x8b5cf6 })
@@ -102,17 +114,17 @@ const BOSS = (() => {
   sparks.frustumCulled = false; // particles move every frame; never cull
   scene.add(sparks);
 
-  // Wake up to n particles from the pool, launching them outward from the boss.
+  // Wake up to n particles from the pool, launching them outward from the middle.
   function burst(n = 60, col = 0xffd23f) {
     pm.color.setHex(col);
     for (let i = 0, c = 0; i < N && c < n; i++) {
       if (pLife[i] <= 0) {
         c++;
         pLife[i] = 1;
-        pPos.set([0, 0.3, 0.5], i * 3); // boss chest position
-        const a = Math.random() * 6.28;            // horizontal angle
-        const b = Math.random() * 3.14 - 1.2;      // vertical angle
-        const s = 2 + Math.random() * 5;           // speed
+        pPos.set([0, 0, 1], i * 3); // just in front of Clawd's face
+        const a = Math.random() * 6.28;        // horizontal angle
+        const b = Math.random() * 3.14 - 1.2;  // vertical angle
+        const s = 2 + Math.random() * 5;        // speed
         pVel.set(
           [Math.cos(a) * s * Math.cos(b), Math.sin(b) * s + 2, Math.sin(a) * s * Math.cos(b)],
           i * 3
@@ -121,150 +133,129 @@ const BOSS = (() => {
     }
   }
 
-  // --- Procedural monster ---------------------------------------------------
+  // --- Clawd: 3D pixel-art voxels ---------------------------------------------
 
-  // [body color, eye color] pairs, one per boss. Each boss also gets
-  // slightly different geometry via its index i (horn count, eye count...).
-  const PAL = [
-    [0x7c3aed, 0xffd23f],
-    [0xdc2626, 0x7cff6b],
-    [0x0891b2, 0xff4d9d],
-    [0x16a34a, 0xffb703],
-    [0xdb2777, 0x6be3ff],
-    [0xea580c, 0xc084fc],
-  ];
+  // Clawd is the boxy coral pet from clawd-on-desk, redrawn as pixel maps:
+  // a wide 11x7 torso, stubby 2x2 side arms, four 1px legs, and two tall
+  // 1x2 black eyes. One character per pixel; rows are bottom-aligned when
+  // built, so his feet always land on the arena disc.
+  const PALETTE = {
+    C: 0xde886d, // coral body (the pet's own body color)
+    E: 0x1a0e08, // eyes / shut lids
+    M: 0x2b120a, // mouth
+    W: 0xfff3e8, // the one tooth in the happy grin
+    S: 0xffbd2e, // floating sparks (wake / dizzy)
+  };
+  // Extrusion depth per pixel type, in voxels: the body is chunky, the face
+  // sticks out in front, sparks float as thin chips.
+  const DEPTH = { C: 4, E: 6, M: 6, W: 6, S: 1 };
 
-  let boss = null; // the live boss record, see shape below
-  let built = -1;  // index of the boss currently on stage
+  // Body building blocks (15 columns wide):
+  //   torso occupies cols 2-12, arms cols 0-1 / 13-14, legs cols 3/5/9/11,
+  //   eyes sit at cols 4 and 10 (rows 2-3 of the body).
+  const T = '..CCCCCCCCCCC..';           // plain torso row
+  const EYES = '..CCECCCCCECC..';         // torso + eye tops
+  const ARMS_EYES = 'CCCCECCCCCECCCC';   // arms + eye bottoms
+  const ARMS = 'CCCCCCCCCCCCCCC';         // arms + plain torso
+  const GRIN = 'CCCCCCMWMCCCCCC';          // arms + grin (mouth-tooth-mouth)
+  const MOUTH = 'CCCCCCCMCCCCCCC';        // arms + tiny mouth (doze)
+  const LEGS = '...C.C...C.C...';         // four legs
+  const SPARKS_WIDE = '.S...........S.';  // wake: sparks either side of the head
+  const SPARKS_AROUND = '...S.......S...'; // dizzy: sparks orbiting
+  const BLANK = '...............';
 
-  // Build boss number i and put it on stage. Called only when the index changes.
-  function build(i) {
-    if (boss) scene.remove(boss.g);
+  const MAPS = {
+    idle: [T, T, EYES, ARMS_EYES, ARMS, T, T, LEGS, LEGS],
+    work: [T, T, T, ARMS_EYES, ARMS, T, T, LEGS, LEGS], // eyes down: half-height
+    doze: [T, T, T, ARMS_EYES, MOUTH, T, T, LEGS, LEGS], // lids shut, tiny mouth
+    wake: [SPARKS_WIDE, BLANK, T, T, EYES, ARMS_EYES, ARMS, T, T, LEGS, LEGS],
+    happy: [T, T, EYES, ARMS_EYES, GRIN, T, T, LEGS, LEGS],
+    dizzy: [SPARKS_AROUND, BLANK, T, T, EYES, ARMS_EYES, ARMS, T, T, LEGS, LEGS],
+  };
 
-    const [bc, ec] = PAL[i % PAL.length];
-    const g = new THREE.Group();
-    const flat = { flatShading: true, roughness: 0.55, metalness: 0.15 };
+  const V = 0.46;  // voxel edge; body is ~6.9 wide and ~4.1 tall — big
+  const BASE_Y = -2.05; // feet height: right on the arena disc
 
-    // Body: a sphere warped by a sine field, so each boss has a unique lumpiness.
-    const bodyG = new THREE.IcosahedronGeometry(1.5, 2);
-    const p = bodyG.attributes.position;
-    const v = new THREE.Vector3();
-    for (let k = 0; k < p.count; k++) {
-      v.fromBufferAttribute(p, k);
-      const n = 1 + 0.12 * Math.sin(v.x * 3 + i) * Math.cos(v.y * 3 + v.z * 2);
-      v.multiplyScalar(n);
-      v.y *= 0.95 + (i % 3) * 0.06; // slight per-boss squash
-      p.setXYZ(k, v.x, v.y, v.z);
+  // Build one version as an InstancedMesh: one box per non-empty pixel,
+  // extruded by its pixel type's depth. Maps are bottom-aligned.
+  const voxMat = new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.55, metalness: 0.1 });
+  function buildVariant(map) {
+    const vox = [];
+    for (let r = 0; r < map.length; r++) {
+      for (let c = 0; c < map[r].length; c++) {
+        const ch = map[r][c];
+        if (ch !== '.') vox.push({ r, c, ch });
+      }
     }
-    bodyG.computeVertexNormals();
-
-    const bodyM = new THREE.MeshStandardMaterial({ color: bc, emissive: 0x000000, ...flat });
-    const body = new THREE.Mesh(bodyG, bodyM);
-    g.add(body);
-
-    // Horns on the head: 2, 4 or 6 depending on the boss index,
-    // spread evenly from left (-1) to right (+1).
-    const hornM = new THREE.MeshStandardMaterial({ color: 0xf5e9d0, ...flat });
-    const horns = 2 + (i % 3) * 2;
-    for (let h = 0; h < horns; h++) {
-      const t = horns === 2 ? (h ? 1 : -1) : (h / (horns - 1)) * 2 - 1;
-      const c = new THREE.Mesh(
-        new THREE.ConeGeometry(0.2, 1.1 + (1 - Math.abs(t)) * 0.6, 7),
-        hornM
-      );
-      c.position.set(t * 1.0, 1.25 - Math.abs(t) * 0.35, -0.1);
-      c.rotation.z = -t * 0.55; // tilt outward
-      g.add(c);
-    }
-
-    // Spikes along the chin.
-    for (let s = 0; s < 7; s++) {
-      const c = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.5, 5), hornM);
-      const a = (s / 6) * Math.PI - Math.PI / 2;
-      c.position.set(Math.sin(a) * 1.4, 0.2 + Math.cos(a) * 0.5 - 0.5, -1.1);
-      c.rotation.set(-1.2, 0, -a * 0.6);
-      g.add(c);
-    }
-
-    // Eyes: glowing, with a pupil that tracks the pointer, and an angry brow.
-    // Bosses alternate between two and three eyes.
-    const eyeM = new THREE.MeshStandardMaterial({ color: ec, emissive: ec, emissiveIntensity: 1.6 });
-    const eyes = [];
-    const eyeN = i % 3 === 1 ? 3 : 2;
-    for (let e = 0; e < eyeN; e++) {
-      const x = eyeN === 2 ? (e ? 0.55 : -0.55) : (e - 1) * 0.55;
-      const y = eyeN === 3 && e === 1 ? 0.78 : 0.45;
-      const eg = new THREE.Group();
-      eg.position.set(x, y, 1.28);
-      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.3, 20, 16), eyeM);
-      const pu = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), new THREE.MeshBasicMaterial({ color: 0x100018 }));
-      pu.position.z = 0.24;
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.1, 0.12), new THREE.MeshStandardMaterial({ color: 0x14081f }));
-      brow.position.set(0, 0.34, 0.15);
-      brow.rotation.z = (x < 0 ? -1 : 1) * -0.4; // slanted, angrier
-      if (eyeN === 3 && e === 1) brow.rotation.z = 0;
-      eg.add(ball, pu, brow);
-      g.add(eg);
-      eyes.push({ eg, pu });
-    }
-
-    // Mouth with teeth.
-    const mouth = new THREE.Mesh(
-      new THREE.BoxGeometry(1.4, 0.38, 0.3),
-      new THREE.MeshStandardMaterial({ color: 0x10000a, emissive: 0x330010 })
-    );
-    mouth.position.set(0, -0.55, 1.35);
-    g.add(mouth);
-    for (let t = 0; t < 6; t++) {
-      const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.22, 4), hornM);
-      tooth.position.set(-0.55 + t * 0.22, -0.42, 1.5);
-      tooth.rotation.x = Math.PI; // point downward
-      g.add(tooth);
-    }
-
-    // Arms and fists, one per side.
-    for (const sd of [-1, 1]) {
-      const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.9, 6, 10), bodyM);
-      arm.position.set(sd * 1.65, -0.5, 0.3);
-      arm.rotation.z = sd * 0.9;
-      g.add(arm);
-      const fist = new THREE.Mesh(new THREE.IcosahedronGeometry(0.38, 1), bodyM);
-      fist.position.set(sd * 2.15, -1.1, 0.5);
-      g.add(fist);
-    }
-
-    // Start tiny; the animation loop scales it up to full size.
-    g.scale.setScalar(0.001);
-    scene.add(g);
-
-    boss = {
-      g,       // the three.js group
-      body,    // body mesh (unused directly, kept for clarity)
-      bodyM,   // body material — emissive used for hit flash
-      eyeM,    // eye material — emissive used for rage glow
-      eyes,    // eye groups; each pupil tracks the pointer
-      mouth,   // mouth mesh — scales up when raging or hit
-      hp: 1,   // 0..1 fraction, synced by BOSS.set()
-      dead: false,
-      dormant: false, // true when no quest is on the board yet
-      punch: 0,       // 0..1 hit recoil, decays over time
-      flash: 0,       // 0..1 white flash on the body, decays over time
-      spin: 0,        // extra spin speed while dying
-      t: 0,           // seconds since this boss was built
-    };
-    built = i;
+    const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(V, V, V), voxMat, vox.length);
+    const rows = map.length;
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const col = new THREE.Color();
+    const pos = new THREE.Vector3();
+    const scl = new THREE.Vector3();
+    vox.forEach((v, i) => {
+      pos.set((v.c - 7) * V, (rows - 1 - v.r) * V + BASE_Y, 0);
+      scl.set(1, 1, DEPTH[v.ch]);
+      m.compose(pos, q, scl);
+      mesh.setMatrixAt(i, m);
+      mesh.setColorAt(i, col.setHex(PALETTE[v.ch]));
+    });
+    mesh.instanceColor.needsUpdate = true;
+    return mesh;
   }
 
-  // --- Pointer tracking -----------------------------------------------------
+  const root = new THREE.Group(); // animated; the variant meshes swap inside it
+  scene.add(root);
+  const variants = {};
+  for (const [name, map] of Object.entries(MAPS)) {
+    variants[name] = buildVariant(map);
+    variants[name].visible = false;
+    root.add(variants[name]);
+  }
 
-  // The boss turns its head and eyes toward the cursor.
-  // look.x / look.y are normalized to -1..1 within the stage bounds.
-  const look = { x: 0, y: 0 };
-  addEventListener('pointermove', e => {
-    const r = stage.getBoundingClientRect();
-    look.x = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width - 0.5) * 2));
-    look.y = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height - 0.5) * 2));
-  });
+  // --- Variant state machine --------------------------------------------------
+
+  let shown = 'doze';
+  variants.doze.visible = true;
+  let revert = null; // pending timer that ends a cameo variant
+  let popT = 1;      // 0..1 pop-in progress on the current variant
+  let phase = 0;     // seconds since the current variant was shown
+  let punch = 0;     // 0..1 hit squash, decays over time
+  let spinAcc = 0;  // accumulated spin (dizzy)
+  let hpScale = 1;  // shrinks slightly as HP drops
+  let deadFlag = false;
+
+  // Per-variant motion: bob amplitude/frequency, tilt, jump, spin speed.
+  const MOTION = {
+    idle:  { bobA: 0.06, bobF: 1.6, tilt: 0.02, jumpF: 0, spin: 0 },
+    work:  { bobA: 0.04, bobF: 6.0, tilt: 0.04, jumpF: 0, spin: 0 }, // typing jitter
+    doze:  { bobA: 0.05, bobF: 0.8, tilt: 0.06, jumpF: 0, spin: 0 }, // sleepy sway
+    wake:  { bobA: 0.03, bobF: 2.0, tilt: 0.04, jumpF: 3, spin: 0 },
+    happy: { bobA: 0.02, bobF: 1.0, tilt: 0.03, jumpF: 5, spin: 0 }, // jumping
+    dizzy: { bobA: 0.04, bobF: 2.0, tilt: 0.08, jumpF: 0, spin: 2.6 }, // KO spin
+  };
+
+  // Swap the displayed variant, restarting its pop-in.
+  function show(name) {
+    if (shown === name) return;
+    variants[shown].visible = false;
+    shown = name;
+    variants[name].visible = true;
+    popT = 0;
+    phase = 0;
+  }
+
+  // Show a cameo variant (happy, wake) for a moment, then fall back to the
+  // steady variant given in `then`.
+  function cameo(name, then, ms) {
+    if (revert) clearTimeout(revert);
+    show(name);
+    revert = setTimeout(() => {
+      revert = null;
+      show(then);
+    }, ms);
+  }
 
   // --- Resize ----------------------------------------------------------------
 
@@ -272,7 +263,7 @@ const BOSS = (() => {
   let last = performance.now();
 
   // Keep the renderer size in sync with the stage element.
-  // On narrow windows, pull the camera back so the boss still fits.
+  // On narrow windows, pull the camera back so the arena still fits.
   function resize() {
     const w = stage.clientWidth;
     const h = stage.clientHeight;
@@ -298,42 +289,25 @@ const BOSS = (() => {
     ring2.rotation.z = -t * 0.25;
     ring2.material.opacity = 0.35 + 0.15 * Math.sin(t * 2);
 
-    if (boss) {
-      const b = boss;
-      b.t += dt;
+    // Clawd: pop-in scale on variant swap, hit squash, per-variant motion.
+    // Voxel positions are baked in world space (feet on the disc), so the
+    // root only carries the motion offsets.
+    phase += dt;
+    const M = MOTION[shown];
+    popT = Math.min(1, popT + dt * 4);
+    const pop = 1 - Math.pow(1 - popT, 3); // ease-out cubic
+    punch = Math.max(0, punch - dt * 3);
+    const sy = pop * (1 - punch * 0.15) * hpScale;
+    const sxz = pop * (1 + punch * 0.12) * hpScale;
+    root.scale.set(sxz, sy, sxz);
 
-      // Target size: shrink to nothing when dead, shrink a little when
-      // dormant, otherwise stay full size and puff up as HP drops.
-      const tgt = b.dead ? 0.001 : (b.dormant ? 0.7 : 0.85 + 0.15 * b.hp);
-      const cur = b.g.scale.x;
-      const s = cur + (tgt - cur) * Math.min(1, dt * (b.dead ? 3 : 5)) + b.punch * 0.06;
-      b.g.scale.setScalar(Math.max(s, 0.001));
-
-      // Gentle bobbing; sink below the floor when dead.
-      const bob = b.dead ? -3 : Math.sin(t * 1.6) * 0.18 - 0.1;
-      b.g.position.y += (bob - b.g.position.y) * Math.min(1, dt * (b.dead ? 2 : 6));
-
-      // Turn toward the cursor, spin fast while dying.
-      b.spin += ((b.dead ? 9 : 0) - b.spin) * dt * 2;
-      b.g.rotation.y += (look.x * 0.5 - b.g.rotation.y) * dt * 4 + b.spin * dt;
-      b.g.rotation.x += (look.y * 0.25 - b.g.rotation.x) * dt * 4;
-      b.g.rotation.z = Math.sin(t * 1.1) * 0.03 + b.punch * 0.12 * Math.sin(t * 60);
-
-      // Rage grows as HP drops; punch/flash decay after each hit.
-      const rage = 1 - b.hp;
-      b.punch = Math.max(0, b.punch - dt * 3);
-      b.flash = Math.max(0, b.flash - dt * 3.5);
-      b.eyeM.emissiveIntensity =
-        b.dormant || b.dead ? 0.1 : 1.2 + rage * 1.8 + Math.sin(t * 5) * 0.3 * rage;
-      b.bodyM.emissive.setRGB(b.flash, b.flash * 0.05 + rage * 0.05, b.flash * 0.05);
-      b.mouth.scale.y = 1 + (b.dead ? 0 : Math.sin(t * 3) * 0.25 + rage * 0.8) + b.punch * 1.2;
-
-      // Pupils follow the cursor.
-      for (const e of b.eyes) {
-        e.pu.position.x += (look.x * 0.1 - e.pu.position.x) * dt * 6;
-        e.pu.position.y += (-look.y * 0.08 - e.pu.position.y) * dt * 6;
-      }
-    }
+    let y = Math.sin(phase * M.bobF) * M.bobA;
+    if (M.jumpF) y += Math.abs(Math.sin(phase * M.jumpF)) * 0.35;
+    if (deadFlag) y -= 0.3; // slumps down while KO'd
+    root.position.y += (y - root.position.y) * Math.min(1, dt * 6);
+    root.rotation.z = Math.sin(phase * 1.1) * M.tilt + punch * 0.08 * Math.sin(phase * 40);
+    spinAcc += M.spin * dt;
+    root.rotation.y = spinAcc + Math.sin(phase * 0.5) * 0.1; // sway shows the 3D sides
 
     // Sparks: simple gravity sim over the fixed pool.
     const pa = pg.attributes.position;
@@ -364,22 +338,29 @@ const BOSS = (() => {
   // --- Public API -------------------------------------------------------------
 
   return {
-    // Sync the scene with game state. Rebuilds the monster only when the
-    // boss index changes; otherwise just updates hp/dead/dormant in place.
+    // Sync Clawd with the game state. He shrinks slightly as his HP drops;
+    // the version follows the board and the chronometer.
     set(foe, hp, dead, dormant) {
-      if (built !== foe) build(foe);
-      Object.assign(boss, { hp, dead, dormant });
+      hpScale = 0.8 + 0.2 * hp;
+      deadFlag = dead;
+      if (revert) return; // a cameo (wake/happy) is playing out
+
+      const steady = dead ? 'dizzy'
+        : dormant ? 'doze'
+        : running && active ? 'work'
+        : 'idle';
+      if (shown === 'doze' && steady !== 'doze') cameo('wake', steady, 1800); // waking up
+      else show(steady);
     },
-    // Heavy hits (long-worked quests, chronometer finishes) shake harder and burst red.
+    // Heavy hits (long-worked quests) shake harder and burst red.
     hit(big) {
-      if (!boss) return;
-      boss.punch = 1;
-      boss.flash = 1;
+      punch = 1;
       shake = big ? 1.6 : 0.9;
       burst(big ? 100 : 55, big ? 0xff4d6d : 0xffd23f);
     },
-    // Defeat celebration: green burst and the strongest shake.
+    // Defeat celebration: happy for a moment, then he stays dizzy.
     win() {
+      cameo('happy', 'dizzy', 2200);
       burst(150, 0x3ddc97);
       shake = 1.8;
     },

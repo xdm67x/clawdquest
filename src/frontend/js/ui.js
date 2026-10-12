@@ -31,7 +31,7 @@ function render() {
 
   BOSS.set(S.foe, tot ? rem / tot : 1, dead, empty);
   $('bname').textContent = empty
-    ? 'A boss sleeps… add a quest to wake it'
+    ? 'Clawd sleeps… add a quest to wake him'
     : dead
       ? '💀 ' + name + ' — DEFEATED'
       : `${name} · ${rem} quest${rem > 1 ? 's' : ''} left`;

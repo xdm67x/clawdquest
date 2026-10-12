@@ -27,16 +27,9 @@ const TITLES = [
   'Mythic',
 ];
 
-// Boss names, cycled through via S.foe.
-// Clearing the whole board defeats the boss and wakes the next one.
-const NAMES = [
-  'Backlog Beast',
-  'Deadline Drake',
-  'Inbox Imp',
-  'Meeting Maw',
-  'Scope Creeper',
-  'Bug Basilisk',
-];
+// The boss: Claude Code, "Clawd". He is the only boss — every cleared board
+// just wakes him again.
+const NAMES = ['Clawd'];
 
 // Trophies: [id, label, unlock condition].
 // Each condition receives the whole state object S and returns true when earned.
