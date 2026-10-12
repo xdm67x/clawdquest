@@ -1,26 +1,72 @@
-// Persistence. Inside the app this is tiny.store, which writes
-// ~/Library/Application Support/<app id>/store.json; in a plain browser it falls back to localStorage.
+// ---------------------------------------------------------------------------
+// Persistence.
+//
+// Inside the tinyjs app this uses tiny.store, which writes
+// ~/Library/Application Support/<app id>/store.json.
+// In a plain browser it falls back to localStorage, so the page still works
+// when opened outside the app.
+// ---------------------------------------------------------------------------
+
+// The single key the whole state blob is stored under.
 const KEY = 'state';
-const DEFAULTS = () => ({v:1,xp:0,total:0,sessions:0,streak:0,last:null,bosses:0,badges:[],quests:[],foe:0,nextId:1,len:25});
+
+// A fresh state object. Declared as a function so every call returns a new
+// copy with no shared arrays/objects between saves.
+const DEFAULTS = () => ({
+  v: 1,        // save format version, for future migrations
+  xp: 0,       // total experience points
+  total: 0,    // quests completed, all time
+  time: 0,     // total seconds focused (the chronometer)
+  streak: 0,   // consecutive active days
+  last: null,  // last active day, as YYYY-MM-DD
+  bosses: 0,   // bosses defeated
+  badges: [],  // trophy ids unlocked
+  quests: [],  // the current quest board (each quest carries its own secs)
+  foe: 0,     // which boss (index into NAMES) is on the board
+  nextId: 1,   // id for the next quest added
+});
+
+// Storage backend: tiny.store when available, localStorage otherwise.
+// Checked on every call because the tiny bridge may not exist yet at load time.
 const backend = {
-  get: async k => (typeof tiny!=='undefined' && tiny.store) ? tiny.store.get(k) : JSON.parse(localStorage.getItem(k)||'null'),
-  set: async (k,v) => (typeof tiny!=='undefined' && tiny.store) ? tiny.store.set(k,v) : localStorage.setItem(k,JSON.stringify(v))
+  get: async k =>
+    typeof tiny !== 'undefined' && tiny.store
+      ? tiny.store.get(k)
+      : JSON.parse(localStorage.getItem(k) || 'null'),
+  set: async (k, v) =>
+    typeof tiny !== 'undefined' && tiny.store
+      ? tiny.store.set(k, v)
+      : localStorage.setItem(k, JSON.stringify(v)),
 };
 
-let S = DEFAULTS();   // the one game state object; mutate it, then call save()
+// The one game state object. Mutate it anywhere, then call save().
+let S = DEFAULTS();
 
 let pending = Promise.resolve();
-// Writes are queued so they land in order and a failed write never breaks the game.
+
+// Persist the current state.
+// Writes are queued on a promise chain so they land in order, and a failed
+// write is logged without breaking later writes or the game.
 const save = () => {
+  // Deep copy: later mutations of S must not leak into this pending write.
   const snapshot = JSON.parse(JSON.stringify(S));
-  pending = pending.then(() => backend.set(KEY, snapshot)).catch(e => console.error('save failed', e));
+  pending = pending
+    .then(() => backend.set(KEY, snapshot))
+    .catch(e => console.error('save failed', e));
   return pending;
 };
 
-// Must finish before the first render, otherwise early clicks would overwrite saved progress.
+// Load the saved state. Must finish before the first render, otherwise an
+// early click could write the defaults over real progress.
 async function load() {
   try {
     const saved = await backend.get(KEY);
-    if (saved) S = {...DEFAULTS(), ...saved};   // new fields get defaults, old saves keep working
-  } catch (e) { console.error('load failed', e); }
+    if (saved) {
+      // Merge over defaults: new fields get their default value,
+      // and saves from older versions keep working.
+      S = { ...DEFAULTS(), ...saved };
+    }
+  } catch (e) {
+    console.error('load failed', e);
+  }
 }

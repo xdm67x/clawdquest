@@ -1,7 +1,7 @@
 // Entry point: load saved progress, then draw.
 (async () => {
+  // Must complete before rendering — otherwise early clicks would
+  // overwrite saved progress with the defaults.
   await load();
-  len = S.len;
-  document.querySelectorAll('[data-len]').forEach(b => b.classList.toggle('on', +b.dataset.len === len));
   render();
 })();

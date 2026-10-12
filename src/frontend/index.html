@@ -1,60 +1,51 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<title>Quest Log</title>
-<link rel="stylesheet" href="css/style.css">
-<script src="three.min.js"></script>
+  <meta charset="utf-8">
+  <title>Quest Log</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="three.min.js"></script>
 </head>
+
 <body>
-<canvas id="fx"></canvas>
-<div class="app">
-  <div class="stage" id="stage">
-    <canvas id="gl"></canvas>
-    <div class="hud top">
-      <div class="glass hero">
-        <div class="lvl" id="lvl">1</div>
-        <div class="who"><b id="title"></b><small>🔥 <span id="streak"></span>-day streak</small></div>
-        <div class="xpw"><div class="bar xp"><i id="xpbar"></i></div><small id="xptxt"></small></div>
-        <div class="stat"><b id="total"></b><small>quests</small></div>
-        <div class="stat"><b id="sessions"></b><small>rounds</small></div>
-      </div>
-      <div class="bossbar">
-        <div class="bname" id="bname"></div>
-        <div class="hpb"><i id="hpbar"></i><span id="hptxt"></span></div>
-      </div>
-    </div>
-    <div class="hud bottom">
-      <div class="glass focus">
-        <div class="clock" id="clock">25:00</div>
-        <div class="col">
-          <div class="lens"><button class="g" data-len="15">15m</button><button class="g on" data-len="25">25m</button><button class="g" data-len="45">45m</button></div>
-          <button class="go" id="start">⚔ Start round</button>
+  <canvas id="fx"></canvas>
+  <div class="app">
+    <div class="stage" id="stage">
+      <canvas id="gl"></canvas>
+      <div class="hud top">
+        <div class="glass hero">
+          <div class="lvl" id="lvl">1</div>
+          <div class="who"><b id="title"></b><small>🔥 <span id="streak"></span>-day streak</small></div>
+          <div class="xpw">
+            <div class="bar xp"><i id="xpbar"></i></div><small id="xptxt"></small>
+          </div>
+          <div class="stat"><b id="total"></b><small>quests</small></div>
+          <div class="stat"><b id="time"></b><small>focused</small></div>
         </div>
-        <div class="focusinfo" id="focusinfo"></div>
+        <div class="bossbar">
+          <div class="bname" id="bname"></div>
+          <div class="hpb"><i id="hpbar"></i><span id="hptxt"></span></div>
+        </div>
+      </div>
+      <div class="hud bottom">
+        <div id="list"></div>
+        <form id="form" class="glass capture" autocomplete="off">
+          <input type="text" id="newq" placeholder="What must be done?" autocomplete="off">
+          <button>Add</button>
+        </form>
       </div>
     </div>
   </div>
 
-  <div class="glass side">
-    <div class="head"><h2>Quests</h2><span id="qcount"></span></div>
-    <form id="form">
-      <input type="text" id="newq" placeholder="What must be done?" autocomplete="off">
-      <button>Add</button>
-      <select id="size"><option value="1">Small · 10 xp</option><option value="2" selected>Medium · 25 xp</option><option value="4">Large · 60 xp</option></select>
-    </form>
-    <div id="list"></div>
-    <div class="troph"><h2>Trophies</h2><div class="badges" id="badges"></div></div>
-  </div>
-</div>
-
-<script src="js/config.js"></script>
-<script src="js/store.js"></script>
-<script src="js/boss.js"></script>
-<script src="js/fx.js"></script>
-<script src="js/game.js"></script>
-<script src="js/timer.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/main.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/boss.js"></script>
+  <script src="js/fx.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/timer.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/main.js"></script>
 </body>
+
 </html>
