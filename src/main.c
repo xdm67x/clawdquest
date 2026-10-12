@@ -19,7 +19,7 @@
 int app_w = 1280, app_h = 800;
 int app_pw = 1280, app_ph = 800;
 
-// Debug aid (QUESTLOG_DUMP=1): average color of a few regions of the
+// Debug aid (CLAWDQUEST_DUMP=1): average color of a few regions of the
 // just-rendered frame, logged once a few frames in — a headless sanity check.
 static void dump_frame(int pw, int ph) {
     unsigned char *px = SDL_malloc((size_t)pw * (size_t)ph * 4);
@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-    SDL_Window *win = SDL_CreateWindow("Quest Log", 1280, 800,
+    SDL_Window *win = SDL_CreateWindow("Clawd Quest", 1280, 800,
                                        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
                                        SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!win) {
@@ -167,7 +167,7 @@ int main(int argc, char **argv) {
         scene_frame(t, dt);
         ui_frame(t, dt);
 
-        if (SDL_getenv("QUESTLOG_DUMP") && frames == 5) dump_frame(pw, ph);
+        if (SDL_getenv("CLAWDQUEST_DUMP") && frames == 5) dump_frame(pw, ph);
         frames++;
 
         SDL_GL_SwapWindow(win);

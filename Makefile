@@ -1,7 +1,7 @@
 # Quest Log — C (SDL3 + OpenGL 3.2 core)
 #
-# make        build build/questlog
-# make app    bundle dist/QuestLog.app (macOS)
+# make        build build/clawdquest
+# make app    bundle dist/ClawdQuest.app (macOS)
 # make font   regenerate src/font_atlas.h (needs freetype)
 # make icon   regenerate build/AppIcon.icns (needs swift)
 # make clean
@@ -27,9 +27,9 @@ else
   GL_LIBS := -lGL
 endif
 
-all: $(BUILD)/questlog
+all: $(BUILD)/clawdquest
 
-$(BUILD)/questlog: $(OBJ)
+$(BUILD)/clawdquest: $(OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJ) $(SDL3_LIBS) $(GL_LIBS)
 
 $(BUILD)/%.o: %.c
@@ -46,7 +46,7 @@ $(BUILD)/test_save: tools/test_save.c src/game.c src/json.c src/game.h src/json.
 app: all $(BUILD)/AppIcon.icns
 	@rm -rf $(APP)
 	@mkdir -p $(dir $(APP_BIN)) $(dir $(APP_LIB)) $(APP)/Contents/Resources
-	cp $(BUILD)/questlog $(APP_BIN)
+	cp $(BUILD)/clawdquest $(APP_BIN)
 	cp $(BUILD)/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
 	cp $(SDL3_DYLIB) $(APP_LIB)
 	install_name_tool -id @rpath/libSDL3.0.dylib $(APP_LIB)
@@ -59,8 +59,8 @@ app: all $(BUILD)/AppIcon.icns
 
 # Homebrew's install id for libSDL3 — the path the linker records in the binary.
 SDL3_DYLIB := /opt/homebrew/opt/sdl3/lib/libSDL3.0.dylib
-APP     := dist/QuestLog.app
-APP_BIN := $(APP)/Contents/MacOS/questlog
+APP     := dist/ClawdQuest.app
+APP_BIN := $(APP)/Contents/MacOS/clawdquest
 APP_LIB := $(APP)/Contents/Frameworks/libSDL3.0.dylib
 
 $(BUILD)/AppIcon.icns: tools/mkicon.swift

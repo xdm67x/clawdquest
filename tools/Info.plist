@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Quest Log</string>
+	<string>Clawd Quest</string>
 	<key>CFBundleDisplayName</key>
-	<string>Quest Log</string>
+	<string>Clawd Quest</string>
 	<key>CFBundleIdentifier</key>
-	<string>app.questlog</string>
+	<string>app.clawdquest</string>
 	<key>CFBundleExecutable</key>
-	<string>questlog</string>
+	<string>clawdquest</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>

@@ -31,21 +31,21 @@ jobs:
 
       - name: Verify binary architecture
         run: |
-          file dist/QuestLog.app/Contents/MacOS/questlog
-          lipo -archs dist/QuestLog.app/Contents/MacOS/questlog | grep -q arm64
+          file dist/ClawdQuest.app/Contents/MacOS/clawdquest
+          lipo -archs dist/ClawdQuest.app/Contents/MacOS/clawdquest | grep -q arm64
 
       - name: Create DMG
         run: |
-          hdiutil create -volname "Quest Log" \
-            -srcfolder dist/QuestLog.app \
+          hdiutil create -volname "Clawd Quest" \
+            -srcfolder dist/ClawdQuest.app \
             -format UDZO \
-            -ov "QuestLog-${GITHUB_REF_NAME#v}-macOS-arm64.dmg"
+            -ov "ClawdQuest-${GITHUB_REF_NAME#v}-macOS-arm64.dmg"
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            "QuestLog-${GITHUB_REF_NAME#v}-macOS-arm64.dmg" \
-            --title "Quest Log ${GITHUB_REF_NAME#v}" \
+            "ClawdQuest-${GITHUB_REF_NAME#v}-macOS-arm64.dmg" \
+            --title "Clawd Quest ${GITHUB_REF_NAME#v}" \
             --generate-notes
