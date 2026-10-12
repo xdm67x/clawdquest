@@ -204,6 +204,15 @@ void ui_confetti(int n) {
 
 static float mouse_x = -1, mouse_y = -1;
 
+// Quest list scrolling: bottom-anchored, eased toward the target; drag and
+// wheel set the target.
+static float scroll, target_scroll;
+static bool dragging;
+static float drag_y0, drag_scroll0;
+static bool drag_moved;
+static int last_rows;
+static Rect band_rect;
+
 typedef struct {
     Quest *q;
     float row_y;
@@ -237,12 +246,12 @@ static void fit_text(const char *s, float size, float maxw, char *out, int outn)
 }
 
 void ui_frame(float t, float dt) {
-    (void)dt;
     int W = app_w, H = app_h;
     float mx = mouse_x, my = mouse_y;
 
-    // --- Hero panel ----------------------------------------------------------
-    const float px = 22, py = 18;
+    // --- Hero panel (top-center) ----------------------------------------------
+    const float py = 18;
+    const float px = (W - 430) * 0.5f;
     float hero_h = 70;
     rrect(px, py, 430, hero_h, 20, C_GLASS, C_NONE, 0, C_LINE, 1);
 
@@ -266,7 +275,7 @@ void ui_frame(float t, float dt) {
     // XP bar.
     int l = lvl(S.xp);
     long a = lvlStart(l), b = lvlStart(l + 1);
-    float bx = px + 210, bw = 130;
+    float bx = px + 205, bw = 155;
     rrect(bx, py + 25, bw, 10, 5, rgba(0x000000, 0.40f), C_NONE, 0, rgba(0xffffff, 0.06f), 1);
     float frac = (float)(S.xp - a) / (float)(b - a);
     if (frac > 0) {
@@ -281,22 +290,15 @@ void ui_frame(float t, float dt) {
         font_draw(s, bx, py + 47, 11, C_DIM, 0);
     }
 
-    // Stats: quests completed and focused time.
+    // Stat: quests completed. (The focused-time counter is HUD-free; the
+    // chronometer chips on each quest carry the time now.)
     {
         char v[32];
         SDL_snprintf(v, sizeof v, "%ld", S.total);
         float w = font_measure(v, 20);
-        font_draw(v, px + 356 - w / 2, py + 30, 20, C_TXT, 1);
+        font_draw(v, px + 398 - w / 2, py + 30, 20, C_TXT, 1);
         const char *lab = "QUESTS";
-        font_draw(lab, px + 356 - font_measure(lab, 9) / 2, py + 48, 9, C_DIM, 0);
-    }
-    {
-        char v[16];
-        fmt_time_h(v, sizeof v, S.time);
-        float w = font_measure(v, 20);
-        font_draw(v, px + 430 - 22 - w / 2, py + 30, 20, C_TXT, 1);
-        const char *lab = "FOCUSED";
-        font_draw(lab, px + 430 - 22 - font_measure(lab, 9) / 2, py + 48, 9, C_DIM, 0);
+        font_draw(lab, px + 398 - font_measure(lab, 9) / 2, py + 48, 9, C_DIM, 0);
     }
 
     // --- Boss bar ------------------------------------------------------------
@@ -336,35 +338,54 @@ void ui_frame(float t, float dt) {
     list_x = (W - list_w) / 2;
     float cap_h = 52, cap_y = H - 24 - cap_h;
     float gap = 8, row_h = 44;
-    int fit = (int)((148 + gap) / (row_h + gap)); // max visible rows
-    if (fit < 1) fit = 1;
-    if (fit > 32) fit = 32;
-    int start = S.nquests - fit;
-    if (start < 0) start = 0;
 
-    // Sort done quests to the bottom (stable), take the tail that fits.
+    // Sort done quests to the bottom (stable).
     int ord2[256];
     int m = 0;
     for (int i = 0; i < S.nquests; i++) if (!S.quests[i].done) ord2[m++] = i;
     for (int i = 0; i < S.nquests; i++) if (S.quests[i].done) ord2[m++] = i;
 
-    int visible = m - start;
-    if (visible < 0) visible = 0;
+    // The list band: rows sit bottom-anchored above the capture bar and
+    // scroll up (wheel or drag) when there is more content than fits.
+    float content_h = m > 0 ? m * (row_h + gap) - gap : 0;
+    float band_bottom = cap_y - gap;
+    float band_h = content_h < 148 ? content_h : 148;
+    float band_top = band_bottom - band_h;
+    band_rect = (Rect){ list_x, band_top, list_w, band_h };
 
-    float list_top = cap_y - gap - (visible > 0 ? visible * (row_h + gap) - gap : 0);
+    // New quests snap the view back to the bottom.
+    if (m > last_rows) target_scroll = 0;
+    last_rows = m;
+
+    float max_scroll = content_h > band_h ? content_h - band_h : 0;
+    if (target_scroll < 0) target_scroll = 0;
+    if (target_scroll > max_scroll) target_scroll = max_scroll;
+    if (dragging) scroll = target_scroll; // the finger is authoritative
+    else {
+        float k = dt * 12 < 1 ? dt * 12 : 1;
+        scroll += (target_scroll - scroll) * k;
+    }
+
     nrows = 0;
-    for (int vi = 0; vi < visible; vi++) {
-        int qi = ord2[start + vi];
-        Quest *q = &S.quests[qi];
-        float ry = list_top + vi * (row_h + gap);
-        bool hovered = mx >= list_x && mx <= list_x + list_w && my >= ry && my <= ry + row_h;
-        bool is_act = q->id == active;
-        int is_run = is_act && running;
+    if (band_h > 0) {
+        // Clip the rows to the band while scrolling (logical -> pixel coords).
+        float scale = (float)app_pw / (float)app_w;
+        glEnable(GL_SCISSOR_TEST);
+        glScissor((int)(list_x * scale), (int)((H - band_bottom) * scale),
+                  (int)(list_w * scale), (int)(band_h * scale));
+        for (int vi = 0; vi < m; vi++) {
+            float ry = band_bottom - content_h + scroll + vi * (row_h + gap);
+            if (ry > band_bottom || ry + row_h < band_top) continue;
+            int qi = ord2[vi];
+            Quest *q = &S.quests[qi];
+            bool hovered = mx >= list_x && mx <= list_x + list_w && my >= ry && my <= ry + row_h;
+            bool is_act = q->id == active;
+            int is_run = is_act && running;
 
-        RowHit *rh = &rows[nrows++];
-        rh->q = q;
-        rh->is_run = is_run;
-        rh->row_y = ry;
+            RowHit *rh = &rows[nrows++];
+            rh->q = q;
+            rh->is_run = is_run;
+            rh->row_y = ry;
 
         // Row background.
         Vec4 bg = rgba(0xffffff, 0.04f);
@@ -428,6 +449,8 @@ void ui_frame(float t, float dt) {
         if (hovered)
             font_draw("\xC3\x97", xx + 8 - glyph_w / 2, ry + row_h / 2 + 5, 13, C_DIM, 0);
         rh->xbtn = (Rect){ xx, ry, 30, row_h };
+        }
+        glDisable(GL_SCISSOR_TEST);
     }
 
     // Empty board notice.
@@ -553,7 +576,7 @@ static bool in_rect(Rect r, float x, float y) {
     return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 }
 
-void ui_click(float x, float y) {
+static void ui_click(float x, float y) {
     for (int i = 0; i < nrows; i++) {
         RowHit *r = &rows[i];
         if (!in_rect(r->cb, x, y)) continue;
@@ -578,9 +601,34 @@ void ui_click(float x, float y) {
     if (in_rect(add_btn, x, y)) ui_key(SDLK_RETURN);
 }
 
+void ui_mouse_down(float x, float y) {
+    dragging = x >= band_rect.x && x <= band_rect.x + band_rect.w &&
+               y >= band_rect.y && y <= band_rect.y + band_rect.h;
+    drag_moved = false;
+    drag_y0 = y;
+    drag_scroll0 = target_scroll;
+}
+
+void ui_mouse_up(float x, float y) {
+    // A press that stayed put is a click; a drag suppresses the click.
+    if (dragging && !drag_moved) ui_click(x, y);
+    dragging = false;
+}
+
+void ui_wheel(float dy) {
+    if (mouse_x >= band_rect.x && mouse_x <= band_rect.x + band_rect.w &&
+        mouse_y >= band_rect.y && mouse_y <= band_rect.y + band_rect.h)
+        target_scroll += dy * 52; // one row per notch
+}
+
 void ui_motion(float x, float y) {
     mouse_x = x;
     mouse_y = y;
+    if (dragging) {
+        float dy = y - drag_y0;
+        if (dy > 6 || dy < -6) drag_moved = true;
+        if (drag_moved) target_scroll = drag_scroll0 + dy; // rows follow the finger
+    }
 }
 
 void ui_text(const char *utf8) {

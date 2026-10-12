@@ -8,10 +8,12 @@
 
 void ui_init(void);
 void ui_frame(float t, float dt); // draws the HUD (3D scene is drawn first)
-void ui_click(float x, float y);
-void ui_motion(float x, float y); // hover tracking
-void ui_text(const char *utf8);   // SDL_EVENT_TEXT_INPUT
-void ui_key(SDL_Keycode key);     // Enter/Backspace/etc. while typing
+void ui_mouse_down(float x, float y);
+void ui_mouse_up(float x, float y); // click lands here unless it was a drag
+void ui_motion(float x, float y);   // hover + list drag
+void ui_wheel(float dy);            // scroll the quest list (when over it)
+void ui_text(const char *utf8);     // SDL_EVENT_TEXT_INPUT
+void ui_key(SDL_Keycode key);       // Enter/Backspace/etc. while typing
 void ui_pop(const char *text, float x, float y);
 void ui_toast(const char *text);
 void ui_confetti(int n);
