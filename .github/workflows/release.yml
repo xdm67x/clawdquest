@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release-macos:
+    name: macOS (arm64)
+    runs-on: macos-14 # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install SDL3
+        run: brew install sdl3
+
+      - name: Test
+        run: make test
+
+      - name: Stamp version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          plutil -replace CFBundleShortVersionString -string "$VERSION" tools/Info.plist
+          plutil -replace CFBundleVersion -string "$VERSION" tools/Info.plist
+
+      - name: Build app
+        run: make app
+
+      - name: Verify binary architecture
+        run: |
+          file dist/QuestLog.app/Contents/MacOS/questlog
+          lipo -archs dist/QuestLog.app/Contents/MacOS/questlog | grep -q arm64
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "Quest Log" \
+            -srcfolder dist/QuestLog.app \
+            -format UDZO \
+            -ov "QuestLog-${GITHUB_REF_NAME#v}-macOS-arm64.dmg"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "QuestLog-${GITHUB_REF_NAME#v}-macOS-arm64.dmg" \
+            --title "Quest Log ${GITHUB_REF_NAME#v}" \
+            --generate-notes
