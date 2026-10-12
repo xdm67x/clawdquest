@@ -1,6 +1,5 @@
 // Headless tests for game state persistence (not part of the app).
-// Runs under a throwaway HOME so the real save is never touched; also covers
-// the one-time migration from the original tinyjs store.
+// Runs under a throwaway HOME so the real save is never touched.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,13 +19,10 @@ void sfx_hit(void) {}
 void sfx_add(void) {}
 
 static const char *HOME = "build/testhome";
-static const char *LEGACY =
-    "{\n"
-    "  \"__screens\": \"[]\",\n"
-    "  \"state\": {\"v\":1,\"xp\":400,\"total\":8,\"time\":40,\"streak\":1,"
+static const char *STORE =
+    "{\"v\":1,\"xp\":400,\"total\":8,\"time\":40,\"streak\":1,"
     "\"last\":\"2026-10-11\",\"bosses\":2,\"badges\":[\"first\"],"
-    "\"quests\":[],\"foe\":0,\"nextId\":9}\n"
-    "}\n";
+    "\"quests\":[],\"foe\":0,\"nextId\":9}\n";
 
 static int fails;
 static void check(const char *what, bool ok) {
@@ -43,17 +39,15 @@ static void write_file(const char *path, const char *content) {
 
 int main(void) {
     char path[512];
-    SDL_snprintf(path, sizeof path, "%s/Library/Application Support/app.questlog", HOME);
-    SDL_CreateDirectory(path);
-    SDL_snprintf(path, sizeof path, "%s/Library/Application Support/app.questlog/store.json", HOME);
-    write_file(path, LEGACY);
     SDL_setenv_unsafe("HOME", HOME, true);
+    SDL_CreateDirectory(HOME);
     SDL_snprintf(path, sizeof path, "%s/store.json", HOME);
+    write_file(path, STORE);
     game_set_store(path);
 
-    // First init with no own store: migrates the legacy state.
+    // First init loads the pinned store.
     game_init();
-    check("legacy migrated", S.xp == 400 && S.total == 8 && S.bosses == 2 && S.nextId == 9);
+    check("store loaded", S.xp == 400 && S.total == 8 && S.bosses == 2 && S.nextId == 9);
 
     add_quest("first quest");
     add_quest("second quest");
@@ -77,6 +71,17 @@ int main(void) {
     game_save();
     game_init();
     check("undo reloaded", !S.quests[0].done && S.quests[0].id == 9);
+
+    // Unpinned store defaults to ~/.clawdquest.
+    game_set_store("");
+    game_init();
+    check("fresh store starts at defaults", S.xp == 0 && S.nquests == 0);
+    add_quest("hello");
+    game_save();
+    SDL_snprintf(path, sizeof path, "%s/.clawdquest/store.json", HOME);
+    FILE *f = fopen(path, "r");
+    check("~/.clawdquest/store.json written", f != NULL);
+    if (f) fclose(f);
 
     printf("%s\n", fails ? "FAILURES" : "ALL PASS");
     return fails;

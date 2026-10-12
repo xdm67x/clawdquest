@@ -166,39 +166,21 @@ void game_set_store(const char *path) {
 
 void game_init(void) {
     defaults();
-    if (!store_path[0]) {
-        char *dir = SDL_GetPrefPath("questlog", "app.questlog");
-        if (dir) {
-            snprintf(store_path, sizeof store_path, "%sstore.json", dir);
-            SDL_free(dir);
-        }
+    const char *home = SDL_getenv("HOME");
+
+    // The store lives in ~/.clawdquest.
+    if (!store_path[0] && home) {
+        char dir[512];
+        snprintf(dir, sizeof dir, "%s/.clawdquest", home);
+        SDL_CreateDirectory(dir);
+        snprintf(store_path, sizeof store_path, "%s/store.json", dir);
     }
 
     JVal *root = read_json_file(store_path);
     if (root) {
         apply_save(root);
         json_free(root);
-        return;
     }
-
-    // First run: adopt progress from the original tinyjs app's store, which
-    // kept the same state object under the "state" key.
-    const char *home = SDL_getenv("HOME");
-    if (!home) return;
-    char legacy[512];
-#ifdef __APPLE__
-    snprintf(legacy, sizeof legacy, "%s/Library/Application Support/app.questlog/store.json", home);
-#else
-    snprintf(legacy, sizeof legacy, "%s/.local/share/app.questlog/store.json", home);
-#endif
-    JVal *lg = read_json_file(legacy);
-    if (!lg) return;
-    JVal *state = json_get(lg, "state");
-    if (state) {
-        apply_save(state);
-        game_save();
-    }
-    json_free(lg);
 }
 
 // --- game.js -----------------------------------------------------------------

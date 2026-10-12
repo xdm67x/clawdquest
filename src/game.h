@@ -47,7 +47,7 @@ bool has_badge(const char *id);
 
 void game_init(void);   // load save
 void game_save(void);   // persist immediately
-void game_set_store(const char *path); // test hook: pin the save file location
+void game_set_store(const char *path); // test hook: pin the save file location ("" = ~/.clawdquest)
 void award(long amount, float x, float y);
 void complete(Quest *q, float x, float y);
 void undo(Quest *q);
