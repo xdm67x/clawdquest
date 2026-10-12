@@ -1,5 +1,9 @@
 // ---------------------------------------------------------------------------
 // Shader helpers shared by the 3D scene and the 2D HUD.
+//
+// Attribute locations are bound explicitly (at_locs: NULL-terminated list of
+// attribute names, in order); the GLSL linker's default assignment is not
+// portable — on macOS it handed out a_col=0, breaking every mesh draw.
 // ---------------------------------------------------------------------------
 #pragma once
 
@@ -24,19 +28,23 @@ static inline GLuint gl_compile(GLenum type, const char *src) {
     if (!ok) {
         char log[2048];
         glGetShaderInfoLog(s, sizeof log, NULL, log);
-        SDL_Log("shader compile failed:\n%s\n%s", log, src);
+        fprintf(stderr, "shader compile failed:\n%s\n%s", log, src);
         return 0;
     }
     return s;
 }
 
-static inline GLuint gl_program(const char *vs, const char *fs) {
+// vs/fs: shader sources; at_locs: NULL-terminated attribute names in order.
+static inline GLuint gl_program_at(const char *vs, const char *fs, const char **at_locs) {
     GLuint p = glCreateProgram();
     GLuint v = gl_compile(GL_VERTEX_SHADER, vs);
     GLuint f = gl_compile(GL_FRAGMENT_SHADER, fs);
     if (!v || !f) return 0;
     glAttachShader(p, v);
     glAttachShader(p, f);
+    if (at_locs)
+        for (int i = 0; at_locs[i]; i++)
+            glBindAttribLocation(p, (GLuint)i, at_locs[i]);
     glLinkProgram(p);
     glDeleteShader(v);
     glDeleteShader(f);
@@ -45,7 +53,7 @@ static inline GLuint gl_program(const char *vs, const char *fs) {
     if (!ok) {
         char log[2048];
         glGetProgramInfoLog(p, sizeof log, NULL, log);
-        SDL_Log("program link failed:\n%s", log);
+        fprintf(stderr, "program link failed:\n%s", log);
         return 0;
     }
     return p;

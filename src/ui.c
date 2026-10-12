@@ -104,7 +104,9 @@ static const char *PT2_FS =
     "void main() { frag = v_col; }\n";
 
 void ui_init(void) {
-    rr_prog = gl_program(RR_VS, RR_FS);
+    static const char *rr_attribs[] = { "a_pos", NULL };
+    static const char *pt2_attribs[] = { "a_pos", "a_col", "a_size", NULL };
+    rr_prog = gl_program_at(RR_VS, RR_FS, rr_attribs);
     rr_u_mvp = glGetUniformLocation(rr_prog, "u_mvp");
     rr_u_rect = glGetUniformLocation(rr_prog, "u_rect");
     rr_u_r = glGetUniformLocation(rr_prog, "u_r");
@@ -115,17 +117,20 @@ void ui_init(void) {
     rr_u_bw = glGetUniformLocation(rr_prog, "u_bw");
     glGenBuffers(1, &rr_vbo);
 
-    pt2_prog = gl_program(PT2_VS, PT2_FS);
+    pt2_prog = gl_program_at(PT2_VS, PT2_FS, pt2_attribs);
     pt2_u_mvp = glGetUniformLocation(pt2_prog, "u_mvp");
     glGenBuffers(1, &pt2_vbo);
 }
 
 // Rounded rect: gradient from fill to fill2 when gaxis != 0, plus border.
+// The shader outputs premultiplied alpha, so blend accordingly.
 static void rrect(float x, float y, float w, float h, float r,
                   Vec4 fill, Vec4 fill2, float gaxis, Vec4 border, float bw) {
     Mat4 m;
     m4_ortho(m, (float)app_w, (float)app_h);
     glUseProgram(rr_prog);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glUniformMatrix4fv(rr_u_mvp, 1, GL_FALSE, m);
     glUniform4f(rr_u_rect, x, y, w, h);
     glUniform1f(rr_u_r, r);
@@ -520,6 +525,8 @@ void ui_frame(float t, float dt) {
             Mat4 m;
             m4_ortho(m, (float)app_w, (float)app_h);
             glUseProgram(pt2_prog);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             glUniformMatrix4fv(pt2_u_mvp, 1, GL_FALSE, m);
             glBindBuffer(GL_ARRAY_BUFFER, pt2_vbo);
             glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(m2 * sizeof(float)), buf, GL_STREAM_DRAW);

@@ -83,7 +83,8 @@ void font_init(void) {
     SDL_free(raw);
     SDL_free(rgba);
 
-    prog = gl_program(VS, FS);
+    static const char *font_attribs[] = { "a_pos", "a_uv", "a_col", NULL };
+    prog = gl_program_at(VS, FS, font_attribs);
     u_mvp = glGetUniformLocation(prog, "u_mvp");
     u_tint = glGetUniformLocation(prog, "u_tex");
     glGenBuffers(1, &vbo);

@@ -17,15 +17,15 @@ static inline void m4_identity(Mat4 m) {
     m[0] = m[5] = m[10] = m[15] = 1.0f;
 }
 
-// Right-handed, depth [0, 1] (matches OpenGL clip space used by GL 3.2 core).
+// Right-handed OpenGL perspective, NDC z in [-1, 1].
 static inline void m4_perspective(Mat4 m, float fovy, float aspect, float zn, float zf) {
     float f = 1.0f / tanf(fovy * 0.5f);
     memset(m, 0, sizeof(Mat4));
     m[0] = f / aspect;
     m[5] = f;
-    m[10] = zf / (zf - zn);
+    m[10] = -(zf + zn) / (zf - zn);
     m[11] = -1.0f;
-    m[14] = zf * zn / (zn - zf);
+    m[14] = -2.0f * zf * zn / (zf - zn);
 }
 
 // Pixel-space orthographic projection: y down, (0,0) top-left.

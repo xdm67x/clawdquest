@@ -7,16 +7,42 @@
 // ---------------------------------------------------------------------------
 
 #include <SDL3/SDL.h>
-#include "glutil.h"
 
 #include "app.h"
 #include "audio.h"
 #include "font.h"
 #include "game.h"
+#include "glutil.h"
 #include "scene.h"
 #include "ui.h"
 
 int app_w = 1280, app_h = 800;
+
+// Debug aid (QUESTLOG_DUMP=1): average color of a few regions of the
+// just-rendered frame, logged once a few frames in — a headless sanity check.
+static void dump_frame(int pw, int ph) {
+    unsigned char *px = SDL_malloc((size_t)pw * (size_t)ph * 4);
+    if (!px) return;
+    glReadPixels(0, 0, pw, ph, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    float scale = (float)pw / (float)app_w;
+    const float pts[5][2] = {
+        { 100, 53 }, { 640, 400 }, { 640, 500 }, { 640, 750 }, { 640, 116 },
+    };
+    const char *names[5] = { "hero panel", "boss torso", "boss head", "capture bar", "boss name" };
+    for (int r = 0; r < 5; r++) {
+        int bx = (int)(pts[r][0] * scale), by = (int)((app_h - pts[r][1]) * scale);
+        long sr = 0, sg = 0, sb = 0, n = 0;
+        for (int dy = -6; dy <= 6; dy += 2)
+            for (int dx = -6; dx <= 6; dx += 2) {
+                int x = bx + dx, y = by + dy;
+                if (x < 0 || y < 0 || x >= pw || y >= ph) continue;
+                unsigned char *p = px + ((size_t)y * pw + x) * 4;
+                sr += p[0]; sg += p[1]; sb += p[2]; n++;
+            }
+        if (n) SDL_Log("%-12s avg rgb %ld %ld %ld", names[r], sr / n, sg / n, sb / n);
+    }
+    SDL_free(px);
+}
 
 int main(int argc, char **argv) {
     (void)argc;
@@ -46,6 +72,12 @@ int main(int argc, char **argv) {
     }
     SDL_GL_SetSwapInterval(1); // vsync
 
+    // Core profile has no default vertex array object: every draw that sets
+    // vertex attributes would silently fail without one bound.
+    GLuint vao;
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+
     game_init(); // must finish before the first frame (loads the save)
     font_init();
     scene_init();
@@ -64,6 +96,7 @@ int main(int argc, char **argv) {
     Uint64 last = SDL_GetTicksNS();
     float tick_acc = 0;
     bool done = false;
+    int frames = 0;
 
     while (!done) {
         SDL_Event e;
@@ -120,6 +153,9 @@ int main(int argc, char **argv) {
 
         scene_frame(t, dt);
         ui_frame(t, dt);
+
+        if (SDL_getenv("QUESTLOG_DUMP") && frames == 5) dump_frame(pw, ph);
+        frames++;
 
         SDL_GL_SwapWindow(win);
     }

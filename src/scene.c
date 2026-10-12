@@ -241,9 +241,9 @@ static void build_variant(int v) {
                     out[0] = cx + F[f][k + 1][0] * hx;
                     out[1] = cy + F[f][k + 1][1] * hy;
                     out[2] = F[f][k + 1][2] * hz;
-                    out[3] = F[f][k][0];
-                    out[4] = F[f][k][1];
-                    out[5] = F[f][k][2];
+                    out[3] = F[f][0][0];
+                    out[4] = F[f][0][1];
+                    out[5] = F[f][0][2];
                     out[6] = col.x;
                     out[7] = col.y;
                     out[8] = col.z;
@@ -318,9 +318,12 @@ static void build_torus(float major, float minor, int seg, int ring) {
 // ---------------------------------------------------------------------------
 
 void scene_init(void) {
-    mesh_prog = gl_program(MESH_VS, MESH_FS);
-    pt_prog = gl_program(PT_VS, PT_FS);
-    bg_prog = gl_program(BG_VS, BG_FS);
+    static const char *mesh_attribs[] = { "a_pos", "a_norm", "a_col", NULL };
+    static const char *pt_attribs[] = { "a_pos", "a_size", NULL };
+    static const char *bg_attribs[] = { "a_pos", NULL };
+    mesh_prog = gl_program_at(MESH_VS, MESH_FS, mesh_attribs);
+    pt_prog = gl_program_at(PT_VS, PT_FS, pt_attribs);
+    bg_prog = gl_program_at(BG_VS, BG_FS, bg_attribs);
     mesh_u_mvp = glGetUniformLocation(mesh_prog, "u_mvp");
     mesh_u_model = glGetUniformLocation(mesh_prog, "u_model");
     mesh_u_cam = glGetUniformLocation(mesh_prog, "u_cam");
@@ -477,6 +480,7 @@ static void bind_mesh_attribs(void) {
 }
 
 void scene_frame(float t, float dt) {
+
     float aspect = (float)vp_w / (float)(vp_h ? vp_h : 1);
     float cam_z = aspect < 1.1f ? 11.0f : 9.0f;
 
@@ -540,20 +544,21 @@ void scene_frame(float t, float dt) {
     }
 
     // --- Rings and disc -------------------------------------------------------
+    Mat4 model;
+    Vec3 fogc = hex3(0x120c26);
     glUseProgram(mesh_prog);
     glUniformMatrix4fv(mesh_u_mvp, 1, GL_FALSE, vp);
     glUniform3f(mesh_u_cam, cam.x, cam.y, cam.z);
     glUniform1f(mesh_u_fogd, 0.045f);
-    Vec3 fogc = hex3(0x120c26);
     glUniform3f(mesh_u_fogc, fogc.x, fogc.y, fogc.z);
     glUniform1f(mesh_u_lit, 0);
+    {
     glBindBuffer(GL_ARRAY_BUFFER, torus_vbo);
     bind_mesh_attribs();
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, torus_ibo);
 
     // Inner purple ring. (The original spun it about its own axis, which is
     // invisible on a symmetric torus — skipped.)
-    Mat4 model;
     m4_translate(model, 0, -2.1f, 0);
     glUniformMatrix4fv(mesh_u_model, 1, GL_FALSE, model);
     Vec4 t1 = hex4(0x8b5cf6, 1);
@@ -576,7 +581,17 @@ void scene_frame(float t, float dt) {
     glUniformMatrix4fv(mesh_u_model, 1, GL_FALSE, model);
     Vec4 t3 = hex4(0x8b5cf6, 0.12f);
     glUniform4f(mesh_u_tint, t3.r, t3.g, t3.b, t3.a);
+    }
+
+    {
+    glBindBuffer(GL_ARRAY_BUFFER, disc_vbo);
+    bind_mesh_attribs();
+    m4_identity(model);
+    glUniformMatrix4fv(mesh_u_model, 1, GL_FALSE, model);
+    Vec4 t3 = hex4(0x8b5cf6, 0.12f);
+    glUniform4f(mesh_u_tint, t3.r, t3.g, t3.b, t3.a);
     glDrawArrays(GL_TRIANGLE_FAN, 0, 66);
+    }
 
     // --- Clawd ---------------------------------------------------------------
     {
