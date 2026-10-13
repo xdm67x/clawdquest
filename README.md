@@ -1,6 +1,7 @@
 # Clawd Pet
 
-Clawd is a desktop pet: the little Icons8 mascot guy from Clawd Quest now lives
+Clawd is a desktop pet to not procrastinate and do the work. 
+The little mascot guy from Claude Code now lives
 directly on your macOS desktop, in a small transparent, borderless,
 always-on-top window written in C (C99) using SDL3 and OpenGL 3.2 core.
 
