@@ -10,9 +10,8 @@ CC      ?= cc
 CFLAGS  ?= -std=c99 -O2 -Wall -Wextra -MMD -MP
 BUILD   := build
 
-SRC := src/main.c src/audio.c src/font.c src/game.c src/json.c src/macos.m src/pet.c src/ui.c
+SRC := src/main.c src/audio.c src/font.c src/game.c src/json.c src/pet.c src/ui.c
 OBJ := $(SRC:%.c=$(BUILD)/%.o)
-OBJ := $(OBJ:%.m=$(BUILD)/%.o)
 
 # Homebrew paths when pkg-config is unavailable (macOS default here).
 SDL3_CFLAGS := $(shell pkg-config --cflags sdl3 2>/dev/null || echo -I/opt/homebrew/include)
@@ -21,8 +20,6 @@ SDL3_LIBS   := $(shell pkg-config --libs sdl3 2>/dev/null || echo -L/opt/homebre
 UNAME := $(shell uname)
 ifeq ($(UNAME),Darwin)
   GL_LIBS := -framework OpenGL
-  # AppKit/Foundation: src/macos.m (window shadow tweaks)
-  LDFLAGS += -framework AppKit -framework Foundation
   # Leave room in the Mach-O header so install_name_tool can patch load
   # commands when bundling SDL3 into the .app (see `make app`).
   LDFLAGS += -Wl,-headerpad_max_install_names
@@ -36,10 +33,6 @@ $(BUILD)/clawdquest: $(OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJ) $(SDL3_LIBS) $(GL_LIBS)
 
 $(BUILD)/%.o: %.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(SDL3_CFLAGS) -c -o $@ $<
-
-$(BUILD)/%.o: %.m
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(SDL3_CFLAGS) -c -o $@ $<
 
