@@ -15,6 +15,7 @@
 #include "font.h"
 #include "game.h"
 #include "glutil.h"
+#include "macos.h"
 #include "pet.h"
 #include "ui.h"
 
@@ -175,6 +176,9 @@ int main(int argc, char **argv) {
         return 1;
     }
     SDL_SetWindowAlwaysOnTop(win, true);
+    // The pet draws its own soft shadow; AppKit's window shadow would just
+    // be a warm rectangle around the window bounds.
+    mac_window_disable_shadow(win);
 
     // Restore the last placement, or park him at the bottom-right corner.
     {
