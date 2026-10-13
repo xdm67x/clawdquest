@@ -7,7 +7,7 @@
 
 #include "audio.h"
 #include "json.h"
-#include "scene.h"
+#include "pet.h"
 #include "ui.h"
 
 State S;
@@ -245,7 +245,7 @@ void complete(Quest *q, float x, float y) {
     for (int i = 0; i < S.nquests; i++)
         if (!S.quests[i].done) { boss_down = false; break; }
 
-    scene_boss_hit(q->secs >= HEAVY_HIT_SECS);
+    pet_hit(q->secs >= HEAVY_HIT_SECS);
     sfx_hit();
     if (active == q->id) { active = -1; running = false; }
 
@@ -253,7 +253,7 @@ void complete(Quest *q, float x, float y) {
         S.bosses++;
         award(100, x, y - 20);
         ui_confetti(300);
-        scene_boss_win();
+        pet_win();
         sfx_win();
         ui_toast("BOSS DEFEATED! Everything is done.");
     }

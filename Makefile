@@ -10,7 +10,7 @@ CC      ?= cc
 CFLAGS  ?= -std=c99 -O2 -Wall -Wextra
 BUILD   := build
 
-SRC := src/main.c src/audio.c src/font.c src/game.c src/json.c src/scene.c src/ui.c
+SRC := src/main.c src/audio.c src/font.c src/game.c src/json.c src/pet.c src/ui.c
 OBJ := $(SRC:%.c=$(BUILD)/%.o)
 
 # Homebrew paths when pkg-config is unavailable (macOS default here).

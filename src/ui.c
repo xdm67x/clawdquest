@@ -1,3 +1,11 @@
+// ---------------------------------------------------------------------------
+// The quest card. A rounded glass card that opens above Clawd when he is
+// clicked: level badge, XP bar, streak stats, the quest list (scrollable,
+// click a quest to run its chronometer, check to complete, x to delete),
+// an add bar, and a quit button. Popups, toasts and confetti are anchored
+// to the pet rather than a window edge.
+// ---------------------------------------------------------------------------
+
 #include "ui.h"
 
 #include "glutil.h"
@@ -10,18 +18,16 @@
 #include "font.h"
 #include "game.h"
 #include "math.h"
-#include "scene.h"
+#include "pet.h"
 
-// Palette (from style.css :root).
+// Palette (from the original style.css :root).
 static const Vec4 C_TXT = { 0.957f, 0.941f, 1.0f, 1 };
 static const Vec4 C_DIM = { 0.604f, 0.565f, 0.784f, 1 };
-static const Vec4 C_GLASS = { 0.094f, 0.071f, 0.180f, 0.62f };
+static const Vec4 C_GLASS = { 0.094f, 0.071f, 0.180f, 0.82f };
 static const Vec4 C_LINE = { 0.627f, 0.510f, 1.0f, 0.22f };
 static const Vec4 C_ACC = { 0.545f, 0.361f, 0.965f, 1 };
 static const Vec4 C_ACC2 = { 0.753f, 0.518f, 0.988f, 1 };
 static const Vec4 C_PINK = { 0.925f, 0.282f, 0.600f, 1 };
-static const Vec4 C_HP = { 1.0f, 0.302f, 0.427f, 1 };
-static const Vec4 C_HP2 = { 1.0f, 0.478f, 0.576f, 1 };
 static const Vec4 C_XP = { 1.0f, 0.824f, 0.247f, 1 };
 static const Vec4 C_XP2 = { 1.0f, 0.624f, 0.110f, 1 };
 static const Vec4 C_OK = { 0.239f, 0.863f, 0.592f, 1 };
@@ -151,14 +157,14 @@ static void rrect(float x, float y, float w, float h, float r,
 }
 
 // ---------------------------------------------------------------------------
-// Text input buffer (capture bar)
+// Text input buffer (add bar)
 // ---------------------------------------------------------------------------
 
 static char input_buf[256];
 static int input_len;
 
 // ---------------------------------------------------------------------------
-// Popups, toasts, confetti (fx.js)
+// Popups, toasts, confetti — anchored to the pet.
 // ---------------------------------------------------------------------------
 
 #define MAXPOP 16
@@ -174,8 +180,10 @@ static int nconf;
 void ui_pop(const char *text, float x, float y) {
     int i = npops < MAXPOP ? npops++ : (rand() % MAXPOP);
     SDL_snprintf(pops[i].text, sizeof pops[i].text, "%s", text);
-    pops[i].x = x < 0 ? app_w * 0.4f : x;
-    pops[i].y = y < 0 ? 260 : y;
+    if (x < 0) x = (app_w - font_measure(pops[i].text, 24)) * 0.5f;
+    if (y < 0) y = (float)PET_HEAD_TOP(app_h) - 8;
+    pops[i].x = x;
+    pops[i].y = y;
     pops[i].t0 = (float)SDL_GetTicks() / 1000.0f;
 }
 
@@ -186,9 +194,10 @@ void ui_toast(const char *text) {
 }
 
 void ui_confetti(int n) {
+    float ox = app_w * 0.5f, oy = (float)PET_HEAD_TOP(app_h) - 30;
     for (int i = 0; i < n && nconf < MAXCONF; i++) {
-        conf[nconf].x = app_w * 0.4f;
-        conf[nconf].y = app_h / 3.0f;
+        conf[nconf].x = ox;
+        conf[nconf].y = oy;
         conf[nconf].vx = (((float)rand() / (float)RAND_MAX) - 0.5f) * 16 * 60;
         conf[nconf].vy = -(((float)rand() / (float)RAND_MAX) * 14 + 2) * 60;
         conf[nconf].t = 1.5f; // 90 frames at 60fps
@@ -199,32 +208,46 @@ void ui_confetti(int n) {
 }
 
 // ---------------------------------------------------------------------------
-// Layout + hit testing
+// Panel state + hit testing
 // ---------------------------------------------------------------------------
 
+static bool panel_open;
+static bool quit_req;
 static float mouse_x = -1, mouse_y = -1;
 
-// Quest list scrolling: bottom-anchored, eased toward the target; drag and
-// wheel set the target.
-static float scroll, target_scroll;
+// Quest list scrolling: the target is authoritative (wheel and drag set it).
+static float target_scroll;
 static bool dragging;
 static float drag_y0, drag_scroll0;
 static bool drag_moved;
-static int last_rows;
-static Rect band_rect;
 
 typedef struct {
     Quest *q;
-    float row_y;
-    Rect cb;     // checkbox rect
-    Rect txt;    // text rect
-    Rect xbtn;   // delete rect
-    int is_run;
+    Rect cb;    // checkbox rect
+    Rect txt;  // text rect
+    Rect xbtn; // delete rect
+    bool is_run;
 } RowHit;
-static RowHit rows[32];
+static RowHit rows[256]; // one slot per visible row (the band shows ~5)
 static int nrows;
-static Rect add_btn;
-static float list_x, list_w;
+static Rect card_rect, band_rect, add_btn, quit_btn;
+
+bool ui_panel_open(void) { return panel_open; }
+bool ui_should_quit(void) { return quit_req; }
+
+void ui_set_panel(bool open) {
+    panel_open = open;
+    pet_interact();
+    if (open) return;
+    input_len = 0;
+    input_buf[0] = 0;
+    target_scroll = 0;
+}
+
+bool ui_on_card(float x, float y) {
+    return panel_open && x >= card_rect.x && x <= card_rect.x + card_rect.w &&
+           y >= card_rect.y && y <= card_rect.y + card_rect.h;
+}
 
 // Truncate text to maxw pixels, appending "..." when it does not fit.
 static void fit_text(const char *s, float size, float maxw, char *out, int outn) {
@@ -245,99 +268,75 @@ static void fit_text(const char *s, float size, float maxw, char *out, int outn)
     SDL_snprintf(out, (size_t)outn, "...");
 }
 
-void ui_frame(float t, float dt) {
-    int W = app_w, H = app_h;
-    float mx = mouse_x, my = mouse_y;
+// ---------------------------------------------------------------------------
+// Panel layout
+// ---------------------------------------------------------------------------
 
-    // --- Hero panel (top-center) ----------------------------------------------
-    const float py = 18;
-    const float px = (W - 430) * 0.5f;
-    float hero_h = 70;
-    rrect(px, py, 430, hero_h, 20, C_GLASS, C_NONE, 0, C_LINE, 1);
+static void panel_frame(float t) {
+    (void)t;
+    float cw = 360;
+    if (cw > app_w - 20) cw = (float)app_w - 20;
+    float cx = (app_w - cw) * 0.5f, cy = 10, ch = 300;
+    card_rect = (Rect){ cx, cy, cw, ch };
+    rrect(cx, cy, cw, ch, 18, C_GLASS, C_NONE, 0, C_LINE, 1);
 
-    // Level badge: gradient tile with the level number.
-    rrect(px + 12, py + 12, 46, 46, 14, C_ACC, C_PINK, 2, C_NONE, 0);
+    float ix = cx + 14, iw = cw - 28; // inner box
+
+    // Header: level badge, name, rank.
+    rrect(ix, cy + 12, 30, 30, 9, C_ACC, C_PINK, 2, C_NONE, 0);
     {
         char n[8];
         SDL_snprintf(n, sizeof n, "%d", lvl(S.xp));
-        float w = font_measure(n, 20);
-        font_draw(n, px + 12 + 23 - w / 2, py + 12 + 30, 20, C_WHITE, 1);
+        float w = font_measure(n, 13);
+        font_draw(n, ix + 15 - w / 2, cy + 32, 13, C_WHITE, 1);
     }
-
-    // Rank title and streak.
-    font_draw(title_of(lvl(S.xp)), px + 70, py + 29, 16, C_TXT, 1);
+    font_draw("Clawd Quest", ix + 40, cy + 25, 14, C_TXT, 1);
     {
         char s[48];
-        SDL_snprintf(s, sizeof s, "%d-day streak", S.streak);
-        font_draw(s, px + 70, py + 47, 12, C_DIM, 0);
+        SDL_snprintf(s, sizeof s, "Lv %d · %s", lvl(S.xp), title_of(lvl(S.xp)));
+        font_draw(s, ix + 40, cy + 41, 10, C_DIM, 0);
     }
+
+    // Quit button, top-right.
+    quit_btn = (Rect){ cx + cw - 14 - 48, cy + 15, 48, 20 };
+    bool q_hover = mouse_x >= quit_btn.x && mouse_x <= quit_btn.x + quit_btn.w &&
+                   mouse_y >= quit_btn.y && mouse_y <= quit_btn.y + quit_btn.h;
+    rrect(quit_btn.x, quit_btn.y, quit_btn.w, quit_btn.h, 10,
+          rgba(0xffffff, q_hover ? 0.14f : 0.07f), C_NONE, 0, rgba(0xffffff, 0.16f), 1);
+    font_draw("Quit", quit_btn.x + (quit_btn.w - font_measure("Quit", 10)) * 0.5f,
+              quit_btn.y + 14, 10, C_TXT, 0);
 
     // XP bar.
     int l = lvl(S.xp);
     long a = lvlStart(l), b = lvlStart(l + 1);
-    float bx = px + 205, bw = 155;
-    rrect(bx, py + 25, bw, 10, 5, rgba(0x000000, 0.40f), C_NONE, 0, rgba(0xffffff, 0.06f), 1);
+    float bx = ix, bw = iw - 92, by = cy + 52;
+    rrect(bx, by, bw, 7, 3.5f, rgba(0x000000, 0.40f), C_NONE, 0, rgba(0xffffff, 0.06f), 1);
     float frac = (float)(S.xp - a) / (float)(b - a);
     if (frac > 0) {
         float fw = bw * frac;
-        if (fw < 10) fw = 10;
+        if (fw < 7) fw = 7;
         if (frac > 1) fw = bw;
-        rrect(bx, py + 25, fw, 10, 5, C_XP, C_XP2, 1, C_NONE, 0);
+        rrect(bx, by, fw, 7, 3.5f, C_XP, C_XP2, 1, C_NONE, 0);
     }
     {
-        char s[64];
-        SDL_snprintf(s, sizeof s, "%ld / %ld XP to level %d", S.xp - a, b - a, l + 1);
-        font_draw(s, bx, py + 47, 11, C_DIM, 0);
-    }
-
-    // Stat: quests completed. (The focused-time counter is HUD-free; the
-    // chronometer chips on each quest carry the time now.)
-    {
-        char v[32];
-        SDL_snprintf(v, sizeof v, "%ld", S.total);
-        float w = font_measure(v, 20);
-        font_draw(v, px + 398 - w / 2, py + 30, 20, C_TXT, 1);
-        const char *lab = "QUESTS";
-        font_draw(lab, px + 398 - font_measure(lab, 9) / 2, py + 48, 9, C_DIM, 0);
-    }
-
-    // --- Boss bar ------------------------------------------------------------
-    int tot = S.nquests, rem = 0;
-    for (int i = 0; i < S.nquests; i++)
-        if (!S.quests[i].done) rem++;
-    bool dead = S.nquests > 0 && rem == 0;
-    bool empty = S.nquests == 0;
-
-    scene_set(S.foe, tot ? (float)rem / tot : 1, dead, empty, running);
-
-    float bbw = W < 578 ? W - 60 : 520;
-    float bbx = (W - bbw) / 2;
-    const char *bname;
-    char nb[64];
-    if (empty) bname = "Clawd sleeps... add a quest to wake him";
-    else if (dead) { SDL_snprintf(nb, sizeof nb, "Clawd — DEFEATED"); bname = nb; }
-    else { SDL_snprintf(nb, sizeof nb, "Clawd · %d quest%s left", rem, rem > 1 ? "s" : ""); bname = nb; }
-    font_draw(bname, (W - font_measure(bname, 17)) / 2, py + hero_h + 28, 17, C_TXT, 1);
-
-    float hb_y = py + hero_h + 36;
-    rrect(bbx, hb_y, bbw, 18, 9, rgba(0x000000, 0.67f), C_NONE, 0, rgba(0xff4d6d, 0.33f), 1);
-    if (tot) {
-        float fw = bbw * (float)rem / tot;
-        if (fw < 18) fw = 18;
-        rrect(bbx, hb_y, fw, 18, 9, C_HP, C_HP2, 1, C_NONE, 0);
-    }
-    if (tot) {
         char s[48];
-        SDL_snprintf(s, sizeof s, "HP %d / %d", rem, tot);
-        font_draw(s, (W - font_measure(s, 11)) / 2, hb_y + 13, 11, C_WHITE, 1);
+        SDL_snprintf(s, sizeof s, "%ld / %ld XP", S.xp - a, b - a);
+        font_draw(s, cx + cw - 14 - font_measure(s, 9), by + 7.5f, 9, C_DIM, 0);
     }
 
-    // --- Quest list ----------------------------------------------------------
-    list_w = W * 0.92f;
-    if (list_w > 620) list_w = 620;
-    list_x = (W - list_w) / 2;
-    float cap_h = 52, cap_y = H - 24 - cap_h;
-    float gap = 8, row_h = 44;
+    // Stats line.
+    {
+        char s[96];
+        char th[16];
+        fmt_time_h(th, sizeof th, S.time);
+        SDL_snprintf(s, sizeof s, "%d-day streak · %ld done · %s focused", S.streak, S.total, th);
+        font_draw(s, ix, cy + 78, 10, C_DIM, 0);
+    }
+
+    // Quest band (scrollable). The add bar is docked to the card bottom.
+    float add_y = cy + ch - 14 - 32;
+    float row_h = 30, gap = 6;
+    band_rect = (Rect){ ix, cy + 92, iw, add_y - 8 - (cy + 92) };
 
     // Sort done quests to the bottom (stable).
     int ord2[256];
@@ -345,148 +344,136 @@ void ui_frame(float t, float dt) {
     for (int i = 0; i < S.nquests; i++) if (!S.quests[i].done) ord2[m++] = i;
     for (int i = 0; i < S.nquests; i++) if (S.quests[i].done) ord2[m++] = i;
 
-    // The list band: rows sit bottom-anchored above the capture bar and
-    // scroll up (wheel or drag) when there is more content than fits.
     float content_h = m > 0 ? m * (row_h + gap) - gap : 0;
-    float band_bottom = cap_y - gap;
-    float band_h = content_h < 148 ? content_h : 148;
-    float band_top = band_bottom - band_h;
-    band_rect = (Rect){ list_x, band_top, list_w, band_h };
-
-    // New quests snap the view back to the bottom.
-    if (m > last_rows) target_scroll = 0;
-    last_rows = m;
-
-    float max_scroll = content_h > band_h ? content_h - band_h : 0;
+    float max_scroll = content_h > band_rect.h ? content_h - band_rect.h : 0;
     if (target_scroll < 0) target_scroll = 0;
     if (target_scroll > max_scroll) target_scroll = max_scroll;
-    if (dragging) scroll = target_scroll; // the finger is authoritative
-    else {
-        float k = dt * 12 < 1 ? dt * 12 : 1;
-        scroll += (target_scroll - scroll) * k;
-    }
 
     nrows = 0;
-    if (band_h > 0) {
-        // Clip the rows to the band while scrolling (logical -> pixel coords).
+    if (band_rect.h > 0) {
         float scale = (float)app_pw / (float)app_w;
         glEnable(GL_SCISSOR_TEST);
-        glScissor((int)(list_x * scale), (int)((H - band_bottom) * scale),
-                  (int)(list_w * scale), (int)(band_h * scale));
+        glScissor((int)(band_rect.x * scale),
+                  (int)((app_h - (band_rect.y + band_rect.h)) * scale),
+                  (int)(band_rect.w * scale), (int)(band_rect.h * scale));
         for (int vi = 0; vi < m; vi++) {
-            float ry = band_bottom - content_h + scroll + vi * (row_h + gap);
-            if (ry > band_bottom || ry + row_h < band_top) continue;
+            float ry = band_rect.y + vi * (row_h + gap) - target_scroll;
+            if (ry + row_h < band_rect.y || ry > band_rect.y + band_rect.h) continue;
             int qi = ord2[vi];
             Quest *q = &S.quests[qi];
-            bool hovered = mx >= list_x && mx <= list_x + list_w && my >= ry && my <= ry + row_h;
+            bool hovered = mouse_x >= band_rect.x && mouse_x <= band_rect.x + band_rect.w &&
+                           mouse_y >= ry && mouse_y <= ry + row_h;
             bool is_act = q->id == active;
-            int is_run = is_act && running;
+            bool is_run = is_act && running;
+
+            // Row background.
+            Vec4 bg = rgba(0xffffff, 0.04f);
+            Vec4 border = C_NONE;
+            if (is_act) {
+                bg = rgba(0x8b5cf6, 0.20f);
+                border = C_ACC2;
+            } else if (hovered) {
+                bg = rgba(0xffffff, 0.08f);
+            }
+            rrect(band_rect.x, ry, band_rect.w, row_h, 10, bg, C_NONE, 0, border, 1);
 
             RowHit *rh = &rows[nrows++];
             rh->q = q;
             rh->is_run = is_run;
-            rh->row_y = ry;
 
-        // Row background.
-        Vec4 bg = rgba(0xffffff, 0.04f);
-        Vec4 border = C_NONE;
-        if (is_act) {
-            bg = rgba(0x8b5cf6, 0.20f);
-            border = C_ACC2;
-        } else if (hovered) {
-            bg = rgba(0xffffff, 0.08f);
-        }
-        rrect(list_x, ry, list_w, row_h, 14, bg, C_NONE, 0, border, 1);
-
-        // Checkbox.
-        float cx = list_x + 12, cy = ry + (row_h - 22) / 2;
-        rrect(cx, cy, 22, 22, 7, q->done ? C_OK : C_NONE, C_NONE, 0,
-              q->done ? C_OK : rgba(0xffffff, 0.27f), 2);
-        if (q->done) {
-            unsigned ch = 0x2713;
-            char g[5] = { 0 };
-            // U+2713 as UTF-8
-            g[0] = (char)(0xE0 | (ch >> 12)); g[1] = (char)(0x80 | ((ch >> 6) & 0x3F));
-            g[2] = (char)(0x80 | (ch & 0x3F));
-            float gw = font_measure(g, 13);
-            font_draw(g, cx + 11 - gw / 2, cy + 16, 13, rgba(0x06281b, 1), 1);
-        }
-        rh->cb = (Rect){ cx, cy, 22, 22 };
-
-        // Quest text (with ellipsis; strikethrough when done).
-        float tx = cx + 32;
-        float maxw = list_w - 32 - 22 - 90;
-        char shown[256];
-        fit_text(q->text, 14, maxw, shown, sizeof shown);
-        Vec4 tcol = q->done ? mul(C_TXT, 0.55f) : C_TXT;
-        font_draw(shown, tx, ry + row_h / 2 + 5, 14, tcol, 0);
-        if (q->done) {
-            float tw = font_measure(shown, 14);
-            rrect(tx, ry + row_h / 2 - 1, tw, 1.5f, 1, tcol, C_NONE, 0, C_NONE, 0);
-        }
-        rh->txt = (Rect){ tx, ry, maxw, row_h };
-
-        // Chronometer chip.
-        long secs = q->secs;
-        if (is_run || secs > 0) {
-            char s[16];
-            fmt_mmss(s, sizeof s, secs);
-            float sw = font_measure(s, 11) + 16;
-            float sx = list_x + list_w - 22 - 44 - sw;
-            if (is_run) {
-                rrect(sx, ry + (row_h - 18) / 2, sw, 18, 9, rgba(0x8b5cf6, 0.13f), C_NONE, 0, C_NONE, 0);
-                font_draw(s, sx + 8, ry + row_h / 2 + 4, 11, C_ACC2, 1);
-            } else if (is_act) {
-                font_draw(s, sx + 8, ry + row_h / 2 + 4, 11, C_ACC2, 1);
-            } else {
-                font_draw(s, sx + 8, ry + row_h / 2 + 4, 11, C_DIM, 1);
+            // Checkbox.
+            float ccx = band_rect.x + 5, ccy = ry + (row_h - 18) / 2;
+            rrect(ccx, ccy, 18, 18, 6, q->done ? C_OK : C_NONE, C_NONE, 0,
+                  q->done ? C_OK : rgba(0xffffff, 0.27f), 2);
+            if (q->done) {
+                unsigned ch = 0x2713;
+                char g[5] = { 0 };
+                g[0] = (char)(0xE0 | (ch >> 12)); g[1] = (char)(0x80 | ((ch >> 6) & 0x3F));
+                g[2] = (char)(0x80 | (ch & 0x3F));
+                float gw = font_measure(g, 11);
+                font_draw(g, ccx + 9 - gw / 2, ccy + 13.5f, 11, rgba(0x06281b, 1), 1);
             }
-        }
+            rh->cb = (Rect){ ccx, ccy, 18, 18 };
 
-        // Delete button, visible on hover.
-        float xx = list_x + list_w - 30;
-        float glyph_w = font_measure("\xC3\x97", 13);
-        if (hovered)
-            font_draw("\xC3\x97", xx + 8 - glyph_w / 2, ry + row_h / 2 + 5, 13, C_DIM, 0);
-        rh->xbtn = (Rect){ xx, ry, 30, row_h };
+            // Quest text (with ellipsis; strikethrough when done).
+            float tx = ccx + 26;
+            float maxw = band_rect.w - 26 - 26 - 56;
+            char shown[256];
+            fit_text(q->text, 12, maxw, shown, sizeof shown);
+            Vec4 tcol = q->done ? mul(C_TXT, 0.55f) : C_TXT;
+            font_draw(shown, tx, ry + row_h / 2 + 4, 12, tcol, 0);
+            if (q->done) {
+                float tw = font_measure(shown, 12);
+                rrect(tx, ry + row_h / 2 - 2, tw, 1.5f, 1, tcol, C_NONE, 0, C_NONE, 0);
+            }
+            rh->txt = (Rect){ tx, ry, maxw, row_h };
+
+            // Chronometer chip.
+            if (is_run || q->secs > 0) {
+                char s[16];
+                fmt_mmss(s, sizeof s, q->secs);
+                float sw = font_measure(s, 10) + 12;
+                float sx = band_rect.x + band_rect.w - 26 - sw;
+                if (is_run) {
+                    rrect(sx, ry + (row_h - 16) / 2, sw, 16, 8, rgba(0x8b5cf6, 0.13f), C_NONE, 0, C_NONE, 0);
+                    font_draw(s, sx + 6, ry + row_h / 2 + 3.5f, 10, C_ACC2, 1);
+                } else {
+                    font_draw(s, sx + 6, ry + row_h / 2 + 3.5f, 10, C_DIM, 0);
+                }
+            }
+
+            // Delete button, visible on hover.
+            float xx = band_rect.x + band_rect.w - 24;
+            if (hovered)
+                font_draw("\xC3\x97", xx + (26 - font_measure("\xC3\x97", 12)) * 0.5f,
+                          ry + row_h / 2 + 4, 12, C_DIM, 0);
+            rh->xbtn = (Rect){ xx, ry, 26, row_h };
         }
         glDisable(GL_SCISSOR_TEST);
     }
 
     // Empty board notice.
     if (!S.nquests) {
-        float ey = cap_y - gap - 64;
-        rrect(list_x, ey, list_w, 64, 14, rgba(0xffffff, 0.03f), C_NONE, 0, C_LINE, 1);
-        const char *l1 = "Empty board.";
-        font_draw(l1, list_x + (list_w - font_measure(l1, 13)) / 2, ey + 26, 13, C_DIM, 0);
-        const char *l2 = "Capture your first quest below to wake the boss.";
-        font_draw(l2, list_x + (list_w - font_measure(l2, 13)) / 2, ey + 46, 13, C_DIM, 0);
+        const char *l1 = "No quests — add one below.";
+        font_draw(l1, cx + (cw - font_measure(l1, 11)) * 0.5f,
+                  band_rect.y + band_rect.h * 0.5f + 4, 11, C_DIM, 0);
     }
 
-    // --- Capture bar ---------------------------------------------------------
-    rrect(list_x, cap_y, list_w, cap_h, 26, C_GLASS, C_NONE, 0, C_ACC2, 1);
-
-    // Placeholder or typed text.
+    // --- Add bar -------------------------------------------------------------
+    rrect(ix, add_y, iw, 32, 16, C_GLASS, C_NONE, 0, C_LINE, 1);
     if (input_len == 0) {
-        const char *ph = "What must be done?";
-        font_draw(ph, list_x + 18, cap_y + cap_h / 2 + 5, 14, C_DIM, 0);
+        const char *ph = "Add a quest...";
+        font_draw(ph, ix + 12, add_y + 21, 12, C_DIM, 0);
     } else {
-        font_draw(input_buf, list_x + 18, cap_y + cap_h / 2 + 5, 14, C_TXT, 0);
+        font_draw(input_buf, ix + 12, add_y + 21, 12, C_TXT, 0);
     }
-    // Caret.
-    if (fmodf(t, 1.0f) < 0.5f) {
-        float cx2 = list_x + 18 + (input_len ? font_measure(input_buf, 14) : 0);
-        rrect(cx2, cap_y + cap_h / 2 - 9, 1.5f, 18, 1, C_ACC2, C_NONE, 0, C_NONE, 0);
+    if (fmodf((float)SDL_GetTicks() / 1000.0f, 1.0f) < 0.5f) {
+        float cx2 = ix + 12 + (input_len ? font_measure(input_buf, 12) : 0);
+        rrect(cx2, add_y + 10, 1.5f, 13, 1, C_ACC2, C_NONE, 0, C_NONE, 0);
     }
-
-    // Add button.
-    float ab_w = 74;
-    add_btn = (Rect){ list_x + list_w - ab_w - 9, cap_y + 9, ab_w, cap_h - 18 };
-    bool ab_hover = mx >= add_btn.x && mx <= add_btn.x + add_btn.w && my >= add_btn.y && my <= add_btn.y + add_btn.h;
-    rrect(add_btn.x, add_btn.y, add_btn.w, add_btn.h, 17, C_ACC, C_ACC2, 1, C_NONE, 0);
-    if (ab_hover) rrect(add_btn.x, add_btn.y, add_btn.w, add_btn.h, 17, rgba(0xffffff, 0.12f), C_NONE, 0, C_NONE, 0);
+    float ab_w = 56;
+    add_btn = (Rect){ ix + iw - ab_w - 4, add_y + 4, ab_w, 24 };
+    bool ab_hover = mouse_x >= add_btn.x && mouse_x <= add_btn.x + add_btn.w &&
+                    mouse_y >= add_btn.y && mouse_y <= add_btn.y + add_btn.h;
+    rrect(add_btn.x, add_btn.y, add_btn.w, add_btn.h, 12, C_ACC, C_ACC2, 1, C_NONE, 0);
+    if (ab_hover) rrect(add_btn.x, add_btn.y, add_btn.w, add_btn.h, 12, rgba(0xffffff, 0.12f), C_NONE, 0, C_NONE, 0);
     const char *add = "Add";
-    font_draw(add, add_btn.x + (add_btn.w - font_measure(add, 14)) / 2, add_btn.y + add_btn.h / 2 + 5, 14, C_WHITE, 1);
+    font_draw(add, add_btn.x + (add_btn.w - font_measure(add, 12)) * 0.5f,
+              add_btn.y + 15.5f, 12, C_WHITE, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Frame
+// ---------------------------------------------------------------------------
+
+void ui_frame(float t, float dt) {
+    // Keep the pet in sync with the game state every frame.
+    int rem = 0;
+    for (int i = 0; i < S.nquests; i++)
+        if (!S.quests[i].done) rem++;
+    pet_set(S.nquests > 0 && rem == 0, S.nquests == 0, running);
+
+    if (panel_open) panel_frame(t);
 
     // --- Floating +XP pops ---------------------------------------------------
     for (int i = 0; i < npops; i++) {
@@ -501,7 +488,8 @@ void ui_frame(float t, float dt) {
         float p = age / 1.1f;
         float ease = 1 - powf(1 - p, 3);
         float alpha = 1 - p * p;
-        font_draw(pops[i].text, pops[i].x, pops[i].y - 80 * ease, 24, (Vec4){ C_XP.r, C_XP.g, C_XP.b, alpha }, 1);
+        font_draw(pops[i].text, pops[i].x, pops[i].y - 80 * ease, 24,
+                  (Vec4){ C_XP.r, C_XP.g, C_XP.b, alpha }, 1);
     }
 
     // --- Toast ---------------------------------------------------------------
@@ -509,12 +497,9 @@ void ui_frame(float t, float dt) {
         float age = t - toast.t0;
         if (age > 2.8f) toast_on = false;
         else {
-            float drop = age < 0.4f ? -30 * (1 - age / 0.4f) : 0;
-            float alpha = age > 2.4f ? 1 - (age - 2.4f) / 0.4f : 1;
-            float tw = font_measure(toast.text, 14) + 44;
-            rrect((W - tw) / 2, 22 + drop, tw, 42, 16, C_ACC, C_PINK, 1, C_NONE, 0);
-            font_draw(toast.text, (W - font_measure(toast.text, 14)) / 2, 22 + drop + 27, 14, C_WHITE, 1);
-            (void)alpha;
+            float tw = font_measure(toast.text, 13) + 36;
+            rrect((app_w - tw) * 0.5f, 12, tw, 34, 14, C_ACC, C_PINK, 1, C_NONE, 0);
+            font_draw(toast.text, (app_w - font_measure(toast.text, 13)) * 0.5f, 33, 13, C_WHITE, 1);
         }
     }
 
@@ -586,22 +571,24 @@ static void ui_click(float x, float y) {
     }
     for (int i = 0; i < nrows; i++) {
         RowHit *r = &rows[i];
-        if (in_rect(r->txt, x, y)) {
-            toggle_timer(r->q->id);
-            return;
-        }
-    }
-    for (int i = 0; i < nrows; i++) {
-        RowHit *r = &rows[i];
         if (in_rect(r->xbtn, x, y)) {
             del_quest(r->q);
             return;
         }
     }
+    for (int i = 0; i < nrows; i++) {
+        RowHit *r = &rows[i];
+        if (in_rect(r->txt, x, y)) {
+            toggle_timer(r->q->id);
+            return;
+        }
+    }
     if (in_rect(add_btn, x, y)) ui_key(SDLK_RETURN);
+    if (in_rect(quit_btn, x, y)) quit_req = true;
 }
 
 void ui_mouse_down(float x, float y) {
+    if (!panel_open) return;
     dragging = x >= band_rect.x && x <= band_rect.x + band_rect.w &&
                y >= band_rect.y && y <= band_rect.y + band_rect.h;
     drag_moved = false;
@@ -611,14 +598,15 @@ void ui_mouse_down(float x, float y) {
 
 void ui_mouse_up(float x, float y) {
     // A press that stayed put is a click; a drag suppresses the click.
-    if (dragging && !drag_moved) ui_click(x, y);
+    if (dragging && !drag_moved && panel_open) ui_click(x, y);
     dragging = false;
 }
 
 void ui_wheel(float dy) {
+    if (!panel_open) return;
     if (mouse_x >= band_rect.x && mouse_x <= band_rect.x + band_rect.w &&
         mouse_y >= band_rect.y && mouse_y <= band_rect.y + band_rect.h)
-        target_scroll += dy * 52; // one row per notch
+        target_scroll -= dy * 36; // one row per notch
 }
 
 void ui_motion(float x, float y) {
@@ -627,11 +615,12 @@ void ui_motion(float x, float y) {
     if (dragging) {
         float dy = y - drag_y0;
         if (dy > 6 || dy < -6) drag_moved = true;
-        if (drag_moved) target_scroll = drag_scroll0 + dy; // rows follow the finger
+        if (drag_moved) target_scroll = drag_scroll0 - dy; // rows follow the finger
     }
 }
 
 void ui_text(const char *utf8) {
+    if (!panel_open) return;
     int n = (int)SDL_strlen(utf8);
     if (input_len + n < (int)sizeof input_buf - 1) {
         memcpy(input_buf + input_len, utf8, (size_t)n);
@@ -641,6 +630,7 @@ void ui_text(const char *utf8) {
 }
 
 void ui_key(SDL_Keycode key) {
+    if (!panel_open) return;
     if (key == SDLK_BACKSPACE) {
         // Remove the last UTF-8 sequence.
         while (input_len > 0 && (input_buf[input_len - 1] & 0xC0) == 0x80) input_len--;

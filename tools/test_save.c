@@ -12,8 +12,8 @@
 void ui_pop(const char *t, float x, float y) { (void)t; (void)x; (void)y; }
 void ui_toast(const char *t) { (void)t; }
 void ui_confetti(int n) { (void)n; }
-void scene_boss_hit(bool b) { (void)b; }
-void scene_boss_win(void) {}
+void pet_hit(bool b) { (void)b; }
+void pet_win(void) {}
 void sfx_win(void) {}
 void sfx_hit(void) {}
 void sfx_add(void) {}
@@ -72,8 +72,12 @@ int main(void) {
     game_init();
     check("undo reloaded", !S.quests[0].done && S.quests[0].id == 9);
 
-    // Unpinned store defaults to ~/.clawdquest.
+    // Unpinned store defaults to ~/.clawdquest. A previous run leaves state
+    // there, so clear it before checking that a fresh store starts at
+    // defaults (the test must be idempotent across runs).
     game_set_store("");
+    SDL_snprintf(path, sizeof path, "%s/.clawdquest/store.json", HOME);
+    remove(path);
     game_init();
     check("fresh store starts at defaults", S.xp == 0 && S.nquests == 0);
     add_quest("hello");

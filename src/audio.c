@@ -73,3 +73,4 @@ void sfx_win(void) {
     for (int i = 0; i < 4; i++) beep(f[i], 0.15f, 0.09f * i);
 }
 void sfx_add(void) { beep(440, 0.06f, 0); }
+void sfx_pet(void) { beep(660, 0.05f, 0); beep(880, 0.06f, 0.05f); }

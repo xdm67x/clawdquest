@@ -1,20 +1,30 @@
-#include "scene.h"
+// ---------------------------------------------------------------------------
+// Clawd the desktop pet — renderer.
+//
+// The window is transparent, so there is no arena any more: just Clawd, a
+// soft shadow disc, hit sparks and zZz while he dozes. The camera frames a
+// constant pixel height for the character regardless of window size, so he
+// does not jump when the quest card opens above him.
+// ---------------------------------------------------------------------------
+
+#include "pet.h"
 
 #include <SDL3/SDL.h>
 #include "glutil.h"
 #include <math.h>
 #include <stdlib.h>
-#include <string.h>
 
+#include "app.h"
+#include "font.h"
 #include "math.h"
 
 // ---------------------------------------------------------------------------
 // Shaders
 // ---------------------------------------------------------------------------
 
-// Meshes (voxels, rings, disc). Lighting matches the original three.js
-// setup: hemisphere + directional key + two point lights, then FogExp2.
-// u_tint multiplies the baked vertex color (used for colored primitives).
+// Voxels. Lighting matches the original three.js setup: hemisphere +
+// directional key + two point lights; the fog term is kept but unused
+// (density 0). u_tint multiplies the baked vertex color.
 static const char *MESH_VS =
     "#version 150\n"
     "in vec3 a_pos;\n"
@@ -67,7 +77,7 @@ static const char *MESH_FS =
     "    frag = vec4(mix(rgb, u_fogc, f), base.a);\n"
     "}\n";
 
-// Points (stars, sparks). Size in world units, converted to pixels.
+// Points (sparks). Size in world units, converted to pixels.
 static const char *PT_VS =
     "#version 150\n"
     "in vec3 a_pos;\n"
@@ -98,35 +108,10 @@ static const char *PT_FS =
     "    frag = vec4(mix(u_col.rgb, u_fogc, f), u_col.a);\n"
     "}\n";
 
-// Fullscreen radial-gradient backdrop (the CSS stage background).
-static const char *BG_VS =
-    "#version 150\n"
-    "in vec2 a_pos;\n"
-    "out vec2 v_uv;\n"
-    "void main() {\n"
-    "    v_uv = a_pos * 0.5 + 0.5;\n"
-    "    gl_Position = vec4(a_pos, 0.0, 1.0);\n"
-    "}\n";
-
-static const char *BG_FS =
-    "#version 150\n"
-    "in vec2 v_uv;\n"
-    "uniform vec2 u_res;\n"
-    "out vec4 frag;\n"
-    "void main() {\n"
-    "    vec2 c = vec2(0.5, 0.6);\n"
-    "    vec2 d = (v_uv - c) * vec2(u_res.x / u_res.y, 1.0);\n"
-    "    float r = length(d) * 2.0;\n"
-    "    vec3 a = vec3(0.169, 0.114, 0.333);\n"
-    "    vec3 b = vec3(0.071, 0.047, 0.149);\n"
-    "    vec3 e = vec3(0.031, 0.024, 0.059);\n"
-    "    vec3 rgb = r < 0.75 ? mix(a, b, r / 0.75) : mix(b, e, (r - 0.75) / 1.25);\n"
-    "    frag = vec4(rgb, 1.0);\n"
-    "}\n";
-
 // ---------------------------------------------------------------------------
-// Pixel maps for Clawd's six variants (ported from boss.js).
-// C body, E eyes/lids, M mouth, W tooth, S floating sparks.
+// Pixel maps for Clawd's variants (ported from the original boss.js, plus a
+// closed-eye blink frame). C body, E eyes, L closed lids, M mouth, W tooth,
+// S floating sparks.
 // ---------------------------------------------------------------------------
 
 #define MAPW 15
@@ -134,22 +119,23 @@ static const char *BG_FS =
 #define EYES_ "..CCECCCCCECC.."
 #define ARMS_EYES_ "CCCCECCCCCECCCC"
 #define ARMS_ "CCCCCCCCCCCCCCC"
+#define LIDS_ "CCCCLCCCCCLCCCC"
 #define GRIN_ "CCCCCCMWMCCCCCC"
 #define MOUTH_ "CCCCCCCMCCCCCCC"
 #define LEGS_ "...C.C...C.C..."
-#define SPARKS_WIDE_ ".S...........S."
 #define SPARKS_AROUND_ "...S.......S..."
 #define BLANK_ "..............."
 
-static const char *MAPS[6][11] = {
+static const char *MAPS[7][11] = {
     { T_, T_, EYES_, ARMS_EYES_, ARMS_, T_, T_, LEGS_, LEGS_, NULL, NULL },
     { T_, T_, T_, ARMS_EYES_, ARMS_, T_, T_, LEGS_, LEGS_, NULL, NULL },
     { T_, T_, T_, ARMS_EYES_, MOUTH_, T_, T_, LEGS_, LEGS_, NULL, NULL },
-    { SPARKS_WIDE_, BLANK_, T_, T_, EYES_, ARMS_EYES_, ARMS_, T_, T_, LEGS_, LEGS_ },
+    { SPARKS_AROUND_, BLANK_, T_, T_, EYES_, ARMS_EYES_, ARMS_, T_, T_, LEGS_, LEGS_ },
     { T_, T_, EYES_, ARMS_EYES_, GRIN_, T_, T_, LEGS_, LEGS_, NULL, NULL },
+    { T_, T_, EYES_, LIDS_, ARMS_, T_, T_, LEGS_, LEGS_, NULL, NULL },
     { SPARKS_AROUND_, BLANK_, T_, T_, EYES_, ARMS_EYES_, ARMS_, T_, T_, LEGS_, LEGS_ },
 };
-enum { V_IDLE, V_WORK, V_DOZE, V_WAKE, V_HAPPY, V_DIZZY };
+enum { V_IDLE, V_WORK, V_DOZE, V_WAKE, V_HAPPY, V_BLINK, V_DIZZY };
 
 static int map_rows(int v) {
     for (int r = 0; r < 11; r++)
@@ -158,12 +144,13 @@ static int map_rows(int v) {
 }
 
 typedef struct { float bobA, bobF, tilt, jumpF, spin; } Motion;
-static const Motion MOTION[6] = {
+static const Motion MOTION[7] = {
     [V_IDLE] = { 0.06f, 1.6f, 0.02f, 0, 0 },
     [V_WORK] = { 0.04f, 6.0f, 0.04f, 0, 0 },
     [V_DOZE] = { 0.05f, 0.8f, 0.06f, 0, 0 },
     [V_WAKE] = { 0.03f, 2.0f, 0.04f, 3.0f, 0 },
     [V_HAPPY] = { 0.02f, 1.0f, 0.03f, 5.0f, 0 },
+    [V_BLINK] = { 0.06f, 1.6f, 0.02f, 0, 0 },
     [V_DIZZY] = { 0.04f, 2.0f, 0.08f, 0, 2.6f },
 };
 
@@ -171,15 +158,10 @@ static const Motion MOTION[6] = {
 // GL state
 // ---------------------------------------------------------------------------
 
-static GLuint mesh_prog, pt_prog, bg_prog;
+static GLuint mesh_prog, pt_prog;
 static GLint mesh_u_mvp, mesh_u_model, mesh_u_cam, mesh_u_lit, mesh_u_tint, mesh_u_fogd, mesh_u_fogc;
 static GLint pt_u_mvp, pt_u_model, pt_u_psize, pt_u_col, pt_u_cam, pt_u_fogd, pt_u_fogc;
-static GLint bg_u_res;
-static GLuint quad_vbo;
-
-static GLuint torus_vbo, torus_ibo, torus_nidx;
 static GLuint disc_vbo;
-static GLuint stars_vbo;
 static GLuint sparks_vbo;
 
 #define SPARK_N 160
@@ -187,24 +169,30 @@ static float sp_pos[SPARK_N][3], sp_vel[SPARK_N][3], sp_life[SPARK_N];
 static Vec4 spark_col = { 1, 0.824f, 0.247f, 1 };
 static bool spark_alive;
 
-static struct { GLuint vbo, ibo; int nidx; } variant[6];
+static struct { GLuint vbo, ibo; int nidx; } variant[7];
 
-// Boss animation state (ported from the BOSS state machine).
-static int shown = V_DOZE;
+// Pet animation state.
+static int shown = V_IDLE;
 static float revert_at = -1;
-static int revert_to = V_DOZE;
-static float pop_t = 1, phase = 0, punch = 0, spin_acc = 0, hp_scale = 1;
-static bool dead_flag;
-static float shake = 0, root_y = 0;
-static int vp_w = 1280, vp_h = 800;
+static int revert_to = V_IDLE;
+static float pop_t = 1, phase = 0, punch = 0, spin_acc = 0;
+static bool dead_flag, dormant_flag, working_flag, drag_flag;
+static float idle_secs;            // seconds since the last interaction
+static float blink_t = 3, blink_on = 0;
+static int vp_w = PET_W, vp_h = PET_H;
 
 static float rnd(void) { return (float)rand() / (float)RAND_MAX; }
+
+// Clawd's body in world units (voxel size 0.46, 9 rows, base at -2.05).
+#define FEET_Y (-2.28f)
+#define HEAD_TOP_Y 1.86f
+#define SHADOW_Y (-2.32f)
 
 // Build one Clawd variant: a box per non-empty pixel, extruded per pixel type.
 static void build_variant(int v) {
     static const struct { char ch; int hex; int depth; } PAL[] = {
-        { 'C', 0xde886d, 4 }, { 'E', 0x1a0e08, 6 }, { 'M', 0x2b120a, 6 },
-        { 'W', 0xfff3e8, 6 }, { 'S', 0xffbd2e, 1 },
+        { 'C', 0xde886d, 4 }, { 'E', 0x1a0e08, 6 }, { 'L', 0x1a0e08, 6 },
+        { 'M', 0x2b120a, 6 }, { 'W', 0xfff3e8, 6 }, { 'S', 0xffbd2e, 1 },
     };
     const float V = 0.46f, BASE_Y = -2.05f;
     int rows = map_rows(v);
@@ -270,60 +258,15 @@ static void build_variant(int v) {
     SDL_free(idx);
 }
 
-// Flat torus in the XZ plane, around the origin, white vertex color.
-static void build_torus(float major, float minor, int seg, int ring) {
-    float *verts = SDL_calloc((size_t)((seg + 1) * (ring + 1)) * 10, sizeof(float));
-    unsigned *idx = SDL_calloc((size_t)(seg * ring * 6), sizeof(unsigned));
-    int n = 0, m = 0;
-    for (int i = 0; i <= seg; i++) {
-        float u = (float)i / seg * 2.0f * (float)M_PI;
-        for (int j = 0; j <= ring; j++) {
-            float v = (float)j / ring * 2.0f * (float)M_PI;
-            float cw = major + minor * cosf(v);
-            verts[n++] = cw * cosf(u);
-            verts[n++] = minor * sinf(v);
-            verts[n++] = cw * sinf(u);
-            verts[n++] = cosf(v) * cosf(u);
-            verts[n++] = sinf(v);
-            verts[n++] = cosf(v) * sinf(u);
-            verts[n++] = 1;
-            verts[n++] = 1;
-            verts[n++] = 1;
-            verts[n++] = 1;
-        }
-    }
-    for (int i = 0; i < seg; i++)
-        for (int j = 0; j < ring; j++) {
-            int a = i * (ring + 1) + j, b = a + ring + 1;
-            idx[m++] = (unsigned)a;
-            idx[m++] = (unsigned)b;
-            idx[m++] = (unsigned)(a + 1);
-            idx[m++] = (unsigned)b;
-            idx[m++] = (unsigned)(b + 1);
-            idx[m++] = (unsigned)(a + 1);
-        }
-    glGenBuffers(1, &torus_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, torus_vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(n * sizeof(float)), verts, GL_STATIC_DRAW);
-    glGenBuffers(1, &torus_ibo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, torus_ibo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(m * sizeof(unsigned)), idx, GL_STATIC_DRAW);
-    torus_nidx = m;
-    SDL_free(verts);
-    SDL_free(idx);
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-void scene_init(void) {
+void pet_init(void) {
     static const char *mesh_attribs[] = { "a_pos", "a_norm", "a_col", NULL };
     static const char *pt_attribs[] = { "a_pos", "a_size", NULL };
-    static const char *bg_attribs[] = { "a_pos", NULL };
     mesh_prog = gl_program_at(MESH_VS, MESH_FS, mesh_attribs);
     pt_prog = gl_program_at(PT_VS, PT_FS, pt_attribs);
-    bg_prog = gl_program_at(BG_VS, BG_FS, bg_attribs);
     mesh_u_mvp = glGetUniformLocation(mesh_prog, "u_mvp");
     mesh_u_model = glGetUniformLocation(mesh_prog, "u_model");
     mesh_u_cam = glGetUniformLocation(mesh_prog, "u_cam");
@@ -338,23 +281,21 @@ void scene_init(void) {
     pt_u_cam = glGetUniformLocation(pt_prog, "u_cam");
     pt_u_fogd = glGetUniformLocation(pt_prog, "u_fogd");
     pt_u_fogc = glGetUniformLocation(pt_prog, "u_fogc");
-    bg_u_res = glGetUniformLocation(bg_prog, "u_res");
 
-    for (int v = 0; v < 6; v++) build_variant(v);
-    build_torus(2.6f, 0.04f, 80, 12);
+    for (int v = 0; v < 7; v++) build_variant(v);
 
-    // Disc on the floor: center + 64 rim points, white color, tinted per draw.
+    // Soft shadow disc on the floor: center + 64 rim points, white, tinted.
     {
         float verts[66 * 10];
         int n = 0;
-        verts[n++] = 0; verts[n++] = -2.1f; verts[n++] = 0;
+        verts[n++] = 0; verts[n++] = SHADOW_Y; verts[n++] = 0;
         verts[n++] = 0; verts[n++] = 1; verts[n++] = 0;
         verts[n++] = 1; verts[n++] = 1; verts[n++] = 1; verts[n++] = 1;
         for (int i = 0; i <= 64; i++) {
             float a = (float)i / 64 * 2.0f * (float)M_PI;
-            verts[n++] = cosf(a) * 2.6f;
-            verts[n++] = -2.1f;
-            verts[n++] = sinf(a) * 2.6f;
+            verts[n++] = cosf(a) * 2.3f;
+            verts[n++] = SHADOW_Y;
+            verts[n++] = sinf(a) * 2.3f;
             verts[n++] = 0;
             verts[n++] = 1;
             verts[n++] = 0;
@@ -365,21 +306,6 @@ void scene_init(void) {
         }
         glGenBuffers(1, &disc_vbo);
         glBindBuffer(GL_ARRAY_BUFFER, disc_vbo);
-        glBufferData(GL_ARRAY_BUFFER, sizeof verts, verts, GL_STATIC_DRAW);
-    }
-
-    // Starfield: 300 points far behind the arena.
-    {
-        float verts[300 * 4];
-        int n = 0;
-        for (int i = 0; i < 300; i++) {
-            verts[n++] = (rnd() - 0.5f) * 40;
-            verts[n++] = (rnd() - 0.5f) * 24;
-            verts[n++] = -6 - rnd() * 14;
-            verts[n++] = 0.07f;
-        }
-        glGenBuffers(1, &stars_vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, stars_vbo);
         glBufferData(GL_ARRAY_BUFFER, sizeof verts, verts, GL_STATIC_DRAW);
     }
 
@@ -394,15 +320,9 @@ void scene_init(void) {
     glGenBuffers(1, &sparks_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, sparks_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof sparks, sparks, GL_STREAM_DRAW);
-
-    // Backdrop quad buffer.
-    static const float quad[12] = { -1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1 };
-    glGenBuffers(1, &quad_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_STATIC_DRAW);
 }
 
-void scene_resize(int w, int h) {
+void pet_resize(int w, int h) {
     vp_w = w;
     vp_h = h;
 }
@@ -440,29 +360,37 @@ static void burst(int n, int hex) {
     }
 }
 
-void scene_boss_hit(bool big) {
+void pet_hit(bool big) {
     punch = 1;
-    shake = big ? 1.6f : 0.9f;
     burst(big ? 100 : 55, big ? 0xff4d6d : 0xffd23f);
 }
 
-void scene_boss_win(void) {
+void pet_win(void) {
     cameo(V_HAPPY, V_DIZZY, 2200, (float)SDL_GetTicks() / 1000.0f);
     burst(150, 0x3ddc97);
-    shake = 1.8f;
 }
 
-void scene_set(int foe, float hp, bool dead, bool dormant, bool working) {
-    (void)foe;
-    hp_scale = 0.8f + 0.2f * hp;
-    dead_flag = dead;
-    if (revert_at >= 0) return; // a cameo (wake/happy) is playing out
+static int steady_variant(void) {
+    return dead_flag ? V_DIZZY : working_flag ? V_WORK
+         : (dormant_flag || idle_secs > 300.0f) ? V_DOZE : V_IDLE;
+}
 
-    int steady = dead ? V_DIZZY : dormant ? V_DOZE : working ? V_WORK : V_IDLE;
-    if (shown == V_DOZE && steady != V_DOZE)
-        cameo(V_WAKE, steady, 1800, (float)SDL_GetTicks() / 1000.0f);
-    else
-        show(steady);
+void pet_set(bool dead, bool dormant, bool working) {
+    dead_flag = dead;
+    dormant_flag = dormant;
+    working_flag = working;
+}
+
+void pet_click(void) {
+    cameo(V_HAPPY, steady_variant(), 1500, (float)SDL_GetTicks() / 1000.0f);
+}
+
+void pet_drag(bool on) {
+    drag_flag = on;
+}
+
+void pet_interact(void) {
+    idle_secs = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -479,18 +407,22 @@ static void bind_mesh_attribs(void) {
     glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, stride, (void *)(6 * sizeof(float)));
 }
 
-void scene_frame(float t, float dt) {
+void pet_frame(float t, float dt) {
+    float H = (float)(vp_h ? vp_h : 1);
+    float W = (float)vp_w;
+    float aspect = W / H;
 
-    float aspect = (float)vp_w / (float)(vp_h ? vp_h : 1);
-    float cam_z = aspect < 1.1f ? 11.0f : 9.0f;
+    // Frame a constant pixel height for Clawd regardless of window size.
+    // The voxels have depth (front faces at z=+0.92, toward the camera), so
+    // the perspective magnifies the subject: aim through the front faces.
+    float f = (H * 0.5f) / tanf(21.0f * (float)M_PI / 180.0f);
+    const float FRONT_Z = 0.92f;
+    float dist = FRONT_Z + (HEAD_TOP_Y - FEET_Y) * f / (float)PET_PX;
+    float aim_y = FEET_Y + ((H * 0.5f - (float)PET_FEET_MARGIN) / f) * (dist - FRONT_Z) - 0.45f;
 
-    // Camera with decaying shake.
-    shake -= dt * 3;
-    if (shake < 0) shake = 0;
-    Vec3 cam = { (rnd() - 0.5f) * shake * 0.4f,
-                 0.4f + (rnd() - 0.5f) * shake * 0.4f,
-                 cam_z };
-    Vec3 at = { 0, -0.1f, 0 };
+    // A slightly raised camera, like the old arena view (top faces read 3D).
+    Vec3 cam = { 0, aim_y + 0.45f, dist };
+    Vec3 at = { 0, aim_y - 0.12f, 0 };
     Vec3 up = { 0, 1, 0 };
 
     Mat4 proj, view, vp;
@@ -498,125 +430,88 @@ void scene_frame(float t, float dt) {
     m4_lookAt(view, cam, at, up);
     m4_mul(vp, proj, view);
 
+    idle_secs += dt;
+
+    // Variant state machine: a cameo plays out, dragging wins, else steady.
     if (revert_at >= 0 && t >= revert_at) {
         revert_at = -1;
         show(revert_to);
     }
+    if (drag_flag) {
+        if (revert_at >= 0) revert_at = -1;
+        show(V_DIZZY);
+    } else if (revert_at < 0) {
+        int steady = steady_variant();
+        if (shown == V_DOZE && steady != V_DOZE)
+            cameo(V_WAKE, steady, 1800, t);
+        else
+            show(steady);
+    }
 
-    // --- Backdrop gradient ---------------------------------------------------
-    glDisable(GL_DEPTH_TEST);
-    glUseProgram(bg_prog);
-    glUniform2f(bg_u_res, (float)vp_w, (float)vp_h);
-    glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, (void *)0);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-    glDisableVertexAttribArray(0);
+    // Blinking: a brief closed-eye frame while awake.
+    if (shown == V_IDLE || shown == V_WORK) {
+        if (blink_on > 0) {
+            blink_on -= dt;
+        } else {
+            blink_t -= dt;
+            if (blink_t <= 0) {
+                blink_on = 0.13f;
+                blink_t = 2.5f + rnd() * 4.0f;
+            }
+        }
+    }
+    int disp = (blink_on > 0 && (shown == V_IDLE || shown == V_WORK)) ? V_BLINK : shown;
 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Source-over: alpha must accumulate as coverage (a out = a + dst.a*(1-a)),
+    // or the shadow disc would end up nearly invisible on the desktop.
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                        GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-    // --- Stars ---------------------------------------------------------------
-    {
-        glUseProgram(pt_prog);
-        glUniformMatrix4fv(pt_u_mvp, 1, GL_FALSE, vp);
-        Mat4 rot;
-        m4_rotY(rot, t * 0.01f);
-        glUniformMatrix4fv(pt_u_model, 1, GL_FALSE, rot);
-        glUniform1f(pt_u_psize, (float)vp_h * 0.5f / tanf(21.0f * (float)M_PI / 180.0f));
-        Vec4 col = hex4(0xcbb8ff, 0.8f);
-        glUniform4f(pt_u_col, col.r, col.g, col.b, col.a);
-        glUniform1f(pt_u_fogd, 0.045f);
-        Vec3 fogc = hex3(0x120c26);
-        glUniform3f(pt_u_fogc, fogc.x, fogc.y, fogc.z);
-        glUniform3f(pt_u_cam, cam.x, cam.y, cam.z);
-        glBindBuffer(GL_ARRAY_BUFFER, stars_vbo);
-        GLsizei stride = 4 * sizeof(float);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void *)0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, stride, (void *)(3 * sizeof(float)));
-        glDrawArrays(GL_POINTS, 0, 300);
-        glDisableVertexAttribArray(0);
-        glDisableVertexAttribArray(1);
-    }
-
-    // --- Rings and disc -------------------------------------------------------
-    Mat4 model;
-    Vec3 fogc = hex3(0x120c26);
     glUseProgram(mesh_prog);
     glUniformMatrix4fv(mesh_u_mvp, 1, GL_FALSE, vp);
     glUniform3f(mesh_u_cam, cam.x, cam.y, cam.z);
-    glUniform1f(mesh_u_fogd, 0.045f);
+    glUniform1f(mesh_u_fogd, 0.0f);
+    Vec3 fogc = { 0, 0, 0 };
     glUniform3f(mesh_u_fogc, fogc.x, fogc.y, fogc.z);
     glUniform1f(mesh_u_lit, 0);
+
+    // --- Shadow disc ----------------------------------------------------------
     {
-    glBindBuffer(GL_ARRAY_BUFFER, torus_vbo);
-    bind_mesh_attribs();
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, torus_ibo);
-
-    // Inner purple ring. (The original spun it about its own axis, which is
-    // invisible on a symmetric torus — skipped.)
-    m4_translate(model, 0, -2.1f, 0);
-    glUniformMatrix4fv(mesh_u_model, 1, GL_FALSE, model);
-    Vec4 t1 = hex4(0x8b5cf6, 1);
-    glUniform4f(mesh_u_tint, t1.r, t1.g, t1.b, t1.a);
-    glDrawElements(GL_TRIANGLES, torus_nidx, GL_UNSIGNED_INT, NULL);
-
-    // Outer pink ring: 1.35x scale, pulsing opacity.
-    Mat4 sc;
-    m4_scale(sc, 1.35f, 1.35f, 1.35f);
-    m4_mul(model, model, sc);
-    glUniformMatrix4fv(mesh_u_model, 1, GL_FALSE, model);
-    Vec4 t2 = hex4(0xec4899, 0.35f + 0.15f * sinf(t * 2.0f));
-    glUniform4f(mesh_u_tint, t2.r, t2.g, t2.b, t2.a);
-    glDrawElements(GL_TRIANGLES, torus_nidx, GL_UNSIGNED_INT, NULL);
-
-    // Floor disc.
-    glBindBuffer(GL_ARRAY_BUFFER, disc_vbo);
-    bind_mesh_attribs();
-    m4_identity(model);
-    glUniformMatrix4fv(mesh_u_model, 1, GL_FALSE, model);
-    Vec4 t3 = hex4(0x8b5cf6, 0.12f);
-    glUniform4f(mesh_u_tint, t3.r, t3.g, t3.b, t3.a);
+        Mat4 model;
+        m4_identity(model);
+        glUniformMatrix4fv(mesh_u_model, 1, GL_FALSE, model);
+        float a = 0.20f + 0.05f * sinf(phase * MOTION[V_IDLE].bobF);
+        glUniform4f(mesh_u_tint, 0, 0, 0, a);
+        glBindBuffer(GL_ARRAY_BUFFER, disc_vbo);
+        bind_mesh_attribs();
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 66);
     }
 
+    // --- Clawd ----------------------------------------------------------------
     {
-    glBindBuffer(GL_ARRAY_BUFFER, disc_vbo);
-    bind_mesh_attribs();
-    m4_identity(model);
-    glUniformMatrix4fv(mesh_u_model, 1, GL_FALSE, model);
-    Vec4 t3 = hex4(0x8b5cf6, 0.12f);
-    glUniform4f(mesh_u_tint, t3.r, t3.g, t3.b, t3.a);
-    glDrawArrays(GL_TRIANGLE_FAN, 0, 66);
-    }
-
-    // --- Clawd ---------------------------------------------------------------
-    {
-        const Motion M = MOTION[shown];
+        const Motion M = MOTION[disp];
         phase += dt;
         pop_t += dt * 4;
         if (pop_t > 1) pop_t = 1;
         float pop = 1 - powf(1 - pop_t, 3);
         punch -= dt * 3;
         if (punch < 0) punch = 0;
-        float sy = pop * (1 - punch * 0.15f) * hp_scale;
-        float sxz = pop * (1 + punch * 0.12f) * hp_scale;
+        float sy = pop * (1 - punch * 0.15f);
+        float sxz = pop * (1 + punch * 0.12f);
 
         float y = sinf(phase * M.bobF) * M.bobA;
         if (M.jumpF) y += fabsf(sinf(phase * M.jumpF)) * 0.35f;
-        if (dead_flag) y -= 0.3f;
-        float k = dt * 6 < 1 ? dt * 6 : 1;
-        root_y += (y - root_y) * k;
+        if (disp == V_DIZZY && dead_flag) y -= 0.3f;
 
         spin_acc += M.spin * dt;
         float rotz = sinf(phase * 1.1f) * M.tilt + punch * 0.08f * sinf(phase * 40.0f);
         float roty = spin_acc + sinf(phase * 0.5f) * 0.1f;
 
-        Mat4 t_, rz, ry, s_;
-        m4_translate(t_, 0, root_y, 0);
+        Mat4 t_, rz, ry, s_, model;
+        m4_translate(t_, 0, y, 0);
         m4_rotZ(rz, rotz);
         m4_rotY(ry, roty);
         m4_scale(s_, sxz, sy, sxz);
@@ -627,13 +522,13 @@ void scene_frame(float t, float dt) {
         glUniformMatrix4fv(mesh_u_model, 1, GL_FALSE, model);
         glUniform1f(mesh_u_lit, 1);
         glUniform4f(mesh_u_tint, 1, 1, 1, 1);
-        glBindBuffer(GL_ARRAY_BUFFER, variant[shown].vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, variant[disp].vbo);
         bind_mesh_attribs();
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, variant[shown].ibo);
-        glDrawElements(GL_TRIANGLES, variant[shown].nidx, GL_UNSIGNED_INT, NULL);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, variant[disp].ibo);
+        glDrawElements(GL_TRIANGLES, variant[disp].nidx, GL_UNSIGNED_INT, NULL);
     }
 
-    // --- Sparks ---------------------------------------------------------------
+    // --- Sparks -----------------------------------------------------------------
     spark_alive = false;
     float buf[SPARK_N * 4];
     for (int i = 0; i < SPARK_N; i++) {
@@ -655,10 +550,10 @@ void scene_frame(float t, float dt) {
         Mat4 id;
         m4_identity(id);
         glUniformMatrix4fv(pt_u_model, 1, GL_FALSE, id);
-        glUniform1f(pt_u_psize, (float)vp_h * 0.5f / tanf(21.0f * (float)M_PI / 180.0f));
+        glUniform1f(pt_u_psize, H * 0.5f / tanf(21.0f * (float)M_PI / 180.0f));
         glUniform4f(pt_u_col, spark_col.r, spark_col.g, spark_col.b, 1.0f);
-        glUniform1f(pt_u_fogd, 0.045f);
-        glUniform3f(pt_u_fogc, fogc.x, fogc.y, fogc.z);
+        glUniform1f(pt_u_fogd, 0.0f);
+        glUniform3f(pt_u_fogc, 0, 0, 0);
         glUniform3f(pt_u_cam, cam.x, cam.y, cam.z);
         glBindBuffer(GL_ARRAY_BUFFER, sparks_vbo);
         glBufferData(GL_ARRAY_BUFFER, sizeof buf, buf, GL_STREAM_DRAW);
@@ -667,12 +562,29 @@ void scene_frame(float t, float dt) {
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void *)0);
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, stride, (void *)(3 * sizeof(float)));
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE); // additive
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ONE, GL_ONE); // additive
         glDepthMask(GL_FALSE);
         glDrawArrays(GL_POINTS, 0, SPARK_N);
         glDepthMask(GL_TRUE);
         glDisableVertexAttribArray(0);
         glDisableVertexAttribArray(1);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                            GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    }
+
+    glDisable(GL_DEPTH_TEST);
+
+    // --- zZz while dozing -------------------------------------------------------
+    if (shown == V_DOZE) {
+        float head_top = (float)PET_HEAD_TOP(vp_h);
+        static const char zc[3] = { 'z', 'Z', 'Z' };
+        for (int i = 0; i < 3; i++) {
+            float p = fmodf(t * 0.22f + i * 0.33f, 1.0f);
+            float a = sinf(p * (float)M_PI) * 0.8f;
+            char g[2] = { zc[i], 0 };
+            font_draw(g, W * 0.5f + 40.0f + i * 9.0f + p * 12.0f,
+                      head_top - 6.0f - p * 34.0f,
+                      10.0f + i * 4.0f, (Vec4){ 0.753f, 0.729f, 1.0f, a }, 1);
+        }
     }
 }

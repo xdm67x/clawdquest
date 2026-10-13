@@ -8,3 +8,4 @@ void audio_init(void);
 void sfx_hit(void); // low thump on quest complete
 void sfx_win(void); // rising arpeggio on level-up / board clear
 void sfx_add(void); // blip on quest added
+void sfx_pet(void); // happy chirp when Clawd is patted

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Shader helpers shared by the 3D scene and the 2D HUD.
+// Shader helpers shared by the pet (3D voxels) and the quest card (2D HUD).
 //
 // Attribute locations are bound explicitly (at_locs: NULL-terminated list of
 // attribute names, in order); the GLSL linker's default assignment is not

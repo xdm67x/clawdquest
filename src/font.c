@@ -168,7 +168,8 @@ float font_draw(const char *utf8, float x, float y, float size, Vec4 color, int 
         glBindTexture(GL_TEXTURE_2D, tex);
         glUniform1i(u_tint, 0);
         glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                            GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(n * 48 * sizeof(float)), verts, GL_STREAM_DRAW);
         GLsizei stride = 8 * sizeof(float);
