@@ -467,7 +467,9 @@ static void panel_frame(float t) {
 // ---------------------------------------------------------------------------
 
 void ui_frame(float t, float dt) {
-    // Keep the pet in sync with the game state every frame.
+    // Keep the pet in sync with the game state every frame: fed when every
+    // quest is done, dormant when the board is empty, working while a
+    // chronometer runs.
     int rem = 0;
     for (int i = 0; i < S.nquests; i++)
         if (!S.quests[i].done) rem++;

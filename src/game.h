@@ -20,12 +20,12 @@ typedef struct {
     long time;      // total seconds focused
     int streak;     // consecutive active days
     char last[16];  // last active day, YYYY-MM-DD ("" = none)
-    int bosses;     // bosses defeated
     char badges[16][16]; // trophy ids unlocked
     int nbadges;
     Quest quests[256];
     int nquests;
-    int foe;    // boards cleared so far; Clawd wakes again each time
+    int bosses;    // legacy field (kept so old saves load unchanged)
+    int foe;       // legacy field (kept so old saves load unchanged)
     int nextId; // id for the next quest
 } State;
 
@@ -35,7 +35,6 @@ extern bool running;  // the heartbeat only advances while this is true
 
 #define BASE_XP 10
 #define XP_PER_MIN 4
-#define HEAVY_HIT_SECS 600
 
 int lvl(long xp);
 long lvlStart(int n);

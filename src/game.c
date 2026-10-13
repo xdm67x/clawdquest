@@ -212,7 +212,7 @@ static void touch_streak(void) {
 
 static const struct { const char *id; } BADGES[] = {
     { "first" }, { "ten" }, { "fifty" }, { "focus" }, { "five" },
-    { "streak3" }, { "streak7" }, { "boss" }, { "lvl5" },
+    { "streak3" }, { "streak7" }, { "lvl5" },
 };
 
 static bool badge_ok(const char *id) {
@@ -223,7 +223,6 @@ static bool badge_ok(const char *id) {
     if (strcmp(id, "five") == 0) return S.time >= 18000;
     if (strcmp(id, "streak3") == 0) return S.streak >= 3;
     if (strcmp(id, "streak7") == 0) return S.streak >= 7;
-    if (strcmp(id, "boss") == 0) return S.bosses >= 1;
     if (strcmp(id, "lvl5") == 0) return lvl(S.xp) >= 5;
     return false;
 }
@@ -241,21 +240,19 @@ void complete(Quest *q, float x, float y) {
     long mins = (q->secs + 30) / 60; // Math.round
     award(BASE_XP + mins * XP_PER_MIN, x, y);
 
-    bool boss_down = true;
-    for (int i = 0; i < S.nquests; i++)
-        if (!S.quests[i].done) { boss_down = false; break; }
-
-    pet_hit(q->secs >= HEAVY_HIT_SECS);
+    // A finished quest is an apple for Clawd.
+    pet_feed();
     sfx_hit();
     if (active == q->id) { active = -1; running = false; }
 
-    if (boss_down) {
-        S.bosses++;
-        award(100, x, y - 20);
+    bool all_done = true;
+    for (int i = 0; i < S.nquests; i++)
+        if (!S.quests[i].done) { all_done = false; break; }
+    if (all_done) {
         ui_confetti(300);
         pet_win();
         sfx_win();
-        ui_toast("BOSS DEFEATED! Everything is done.");
+        ui_toast("All quests done!");
     }
 
     check_badges();
@@ -269,14 +266,11 @@ void undo(Quest *q) {
 
 void add_quest(const char *text) {
     if (S.nquests >= 256) return;
-    // Board fully cleared? Start a fresh board and wake the next boss.
+    // Board fully cleared? Start a fresh board.
     bool all_done = S.nquests > 0;
     for (int i = 0; i < S.nquests; i++)
         if (!S.quests[i].done) { all_done = false; break; }
-    if (all_done) {
-        S.nquests = 0;
-        S.foe++;
-    }
+    if (all_done) S.nquests = 0;
     Quest *q = &S.quests[S.nquests++];
     q->id = S.nextId++;
     SDL_strlcpy(q->text, text, sizeof q->text);

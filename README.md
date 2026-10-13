@@ -1,14 +1,14 @@
 # Clawd Pet
 
-Clawd is a desktop pet: the little voxel guy from Clawd Quest now lives
+Clawd is a desktop pet: the little pixel-art guy from Clawd Quest now lives
 directly on your macOS desktop, in a small transparent, borderless,
 always-on-top window written in C (C99) using SDL3 and OpenGL 3.2 core.
 
 - **Drag him anywhere** — grab him and the window follows the cursor.
 - **Click him** to open the quest card above him: level, XP, streak stats,
   the quest list, and an add bar.
-- Click a quest to run its chronometer (Clawd gets to work), check it off to
-  complete it, `x` to delete it.
+- Click a quest to run its chronometer (Clawd gets to work), check it off to feed
+  him an apple, `x` to delete it.
 - While a chronometer runs he works; left alone for five minutes he dozes
   off (zZz); plop him back down and he wakes up dizzy.
 - He remembers his spot on the desktop between runs (`~/.clawdquest/pet.pos`)
@@ -58,7 +58,7 @@ choose **Open** to bypass it.
 ```
 Makefile                 build, test, bundle, and asset-generation targets
 src/                     pet sources (C99)
-  pet.c/.h               Clawd: voxel variants, shadow, sparks, zZz
+  pet.c/.h               Clawd: 2D pixel variants, shadow, sparks, apple, zZz
   ui.c/.h                the quest card + pops/toasts/confetti
   game.c/.h              quest rules, XP, persistence
   main.c                 window, drag-to-move, panel toggle

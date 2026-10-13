@@ -12,7 +12,7 @@
 void ui_pop(const char *t, float x, float y) { (void)t; (void)x; (void)y; }
 void ui_toast(const char *t) { (void)t; }
 void ui_confetti(int n) { (void)n; }
-void pet_hit(bool b) { (void)b; }
+void pet_feed(void) {}
 void pet_win(void) {}
 void sfx_win(void) {}
 void sfx_hit(void) {}

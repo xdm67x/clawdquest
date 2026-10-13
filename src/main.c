@@ -38,7 +38,9 @@ static void dump_frame(int pw, int ph) {
         for (int x = 4; x < app_w; x += 8) {
             int bx = (int)(x * scale_x), by = (int)((app_h - y) * scale_y);
             unsigned char *p = px + ((size_t)by * pw + bx) * 4;
-            line[n++] = p[3] < 32 ? '.' : p[3] < 200 ? '+' : '#';
+            char ch = p[3] < 32 ? '.' : p[3] < 200 ? '+' : '#';
+            if (ch == '#' && p[0] > 200 && p[1] < 130 && p[2] < 160) ch = 'A'; // apple red
+            line[n++] = ch;
         }
         line[n] = 0;
         SDL_Log("y=%3d %s", y, line);
@@ -203,6 +205,9 @@ int main(int argc, char **argv) {
     // panel layout can be checked headlessly (pairs with CLAWDQUEST_DUMP).
     if (SDL_getenv("CLAWDQUEST_PANEL")) set_panel(true);
 
+    // Debug aid (CLAWDQUEST_FEED=1): feed Clawd an apple at startup.
+    if (SDL_getenv("CLAWDQUEST_FEED")) pet_feed();
+
     // Text input is always on: the add bar owns the keyboard while the card
     // is open.
     SDL_StartTextInput(win);
@@ -213,7 +218,6 @@ int main(int argc, char **argv) {
     app_ph = ph;
     glViewport(0, 0, pw, ph);
     SDL_GetWindowSize(win, &app_w, &app_h);
-    pet_resize(app_w, app_h);
 
     Uint64 last = SDL_GetTicksNS();
     float tick_acc = 0;
@@ -234,7 +238,6 @@ int main(int argc, char **argv) {
                     break;
                 case SDL_EVENT_WINDOW_RESIZED:
                     SDL_GetWindowSize(win, &app_w, &app_h);
-                    pet_resize(app_w, app_h);
                     break;
                 case SDL_EVENT_MOUSE_MOTION:
                     ui_motion(e.motion.x, e.motion.y);
