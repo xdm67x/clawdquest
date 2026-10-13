@@ -274,9 +274,9 @@ static void fit_text(const char *s, float size, float maxw, char *out, int outn)
 
 static void panel_frame(float t) {
     (void)t;
-    float cw = 360;
+    float cw = 300;
     if (cw > app_w - 20) cw = (float)app_w - 20;
-    float cx = (app_w - cw) * 0.5f, cy = 10, ch = 300;
+    float cx = (app_w - cw) * 0.5f, cy = 10, ch = 274;
     card_rect = (Rect){ cx, cy, cw, ch };
     rrect(cx, cy, cw, ch, 18, C_GLASS, C_NONE, 0, C_LINE, 1);
 

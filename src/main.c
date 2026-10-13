@@ -199,6 +199,10 @@ int main(int argc, char **argv) {
 
     SDL_ShowWindow(win);
 
+    // Debug aid (CLAWDQUEST_PANEL=1): open the quest card at startup so the
+    // panel layout can be checked headlessly (pairs with CLAWDQUEST_DUMP).
+    if (SDL_getenv("CLAWDQUEST_PANEL")) set_panel(true);
+
     // Text input is always on: the add bar owns the keyboard while the card
     // is open.
     SDL_StartTextInput(win);

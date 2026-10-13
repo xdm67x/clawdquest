@@ -7,7 +7,7 @@
 # make clean
 
 CC      ?= cc
-CFLAGS  ?= -std=c99 -O2 -Wall -Wextra
+CFLAGS  ?= -std=c99 -O2 -Wall -Wextra -MMD -MP
 BUILD   := build
 
 SRC := src/main.c src/audio.c src/font.c src/game.c src/json.c src/pet.c src/ui.c
@@ -35,6 +35,8 @@ $(BUILD)/clawdquest: $(OBJ)
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(SDL3_CFLAGS) -c -o $@ $<
+
+-include $(OBJ:.o=.d)
 
 test: $(BUILD)/test_save
 	$(BUILD)/test_save
