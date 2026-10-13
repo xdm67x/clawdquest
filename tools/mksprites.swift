@@ -4,14 +4,16 @@
 //
 // The icons are flat rect-only SVGs (48px grid, with rotate transforms), so
 // this tool rasterizes them itself — no qlmanage or other renderer needed.
-// Each icon is drawn at 144px into one RGBA atlas (3x3 cells, straight
+// Each icon is drawn at CELL px into one RGBA atlas (3x3 cells, premultiplied
 // alpha) and emitted as a base64 C header the pet loads at startup (the same
 // pattern as the font atlas). Icons by Icons8.
 import Foundation
 import CoreGraphics
 import AppKit
 
-let CELL = 120 // drawn 1:1 by the pet (src/pet.c), so there is no resampling
+// Rasterized at 2x the drawn point size (src/app.h PET_SPR) so that on a
+// Retina display the sprite maps 1:1 to device pixels — no magnifying blur.
+let CELL = 128
 let COLS = 3
 let ROWS = 3
 

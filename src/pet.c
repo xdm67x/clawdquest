@@ -109,9 +109,11 @@ static const Motion MOTION[9] = {
     [V_PARTY] = { 0.010f, 1.5f, 0.025f, 0.10f, 0 },
 };
 
-// How big the (square) sprite is drawn, in pixels: exactly the atlas cell,
-// so the icon maps 1:1 with no resampling artifacts.
-#define SPR_PX SPR_CELL
+// How big the (square) sprite is drawn, in points. The atlas cell is an
+// integer multiple of this (2x, so it maps 1:1 to device pixels on Retina);
+// the typedef below fails to compile if the two ever drift apart.
+#define SPR_PX PET_SPR
+typedef char pet_atlas_cell_multiple[SPR_CELL % PET_SPR == 0 ? 1 : -1];
 
 // ---------------------------------------------------------------------------
 // GL state
@@ -478,8 +480,8 @@ void pet_frame(float t, float dt) {
     glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                         GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-    // --- Shadow (drawn under the sprite, in PET_PX cell units) ---------------
-    float cell = (float)PET_PX / 9.0f;
+    // --- Shadow (drawn under the sprite, in PET_SPR cell units) --------------
+    float cell = (float)PET_SPR / 9.0f;
     {
         Mat4 m, s_, t_;
         m4_scale(s_, cell, cell, 1);
@@ -519,7 +521,6 @@ void pet_frame(float t, float dt) {
                     u0 + 1.0f / SPR_COLS - eu, v0 + 1.0f / SPR_ROWS - ev);
         glUniformMatrix4fv(spr_u_mvp, 1, GL_FALSE, ortho);
         glUniformMatrix4fv(spr_u_model, 1, GL_FALSE, m);
-        glUniform4f(spr_u_uv, u0, v0, u0 + 1.0f / SPR_COLS, v0 + 1.0f / SPR_ROWS);
         glUniform4f(spr_u_tint, 1, 1, 1, 1);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, spr_tex);

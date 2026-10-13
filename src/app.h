@@ -7,14 +7,16 @@
 extern int app_w, app_h;
 extern int app_pw, app_ph;
 
-#define PET_W 176
-#define PET_H 164
+// Clawd is deliberately tiny: just big enough to spot on the desktop without
+// pulling attention. PET_SPR is the drawn sprite size in points; the atlas is
+// rasterized at 2x that (src/pet.c guards the two against drifting apart).
+#define PET_SPR 64
+#define PET_W 88
+#define PET_H 92
 #define PANEL_W 340
-#define PANEL_H 456
+#define PANEL_H 404
 
-// Clawd's framing inside the window: feet this far above the bottom edge,
-// body this many pixels tall (kept constant in both window sizes).
-#define PET_FEET_MARGIN 28
-#define PET_PX 100
+// Clawd's framing inside the window: feet this far above the bottom edge.
+#define PET_FEET_MARGIN 12
 // Screen-space y of the top of Clawd's head (points, y down from 0).
-#define PET_HEAD_TOP(h) ((h) - PET_FEET_MARGIN - PET_PX)
+#define PET_HEAD_TOP(h) ((h) - PET_FEET_MARGIN - PET_SPR)
