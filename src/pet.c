@@ -109,8 +109,9 @@ static const Motion MOTION[9] = {
     [V_PARTY] = { 0.010f, 1.5f, 0.025f, 0.10f, 0 },
 };
 
-// How big the (square) sprite is drawn, in pixels.
-#define SPR_PX 120
+// How big the (square) sprite is drawn, in pixels: exactly the atlas cell,
+// so the icon maps 1:1 with no resampling artifacts.
+#define SPR_PX SPR_CELL
 
 // ---------------------------------------------------------------------------
 // GL state

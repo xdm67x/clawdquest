@@ -33,10 +33,11 @@ static void dump_frame(int pw, int ph) {
     glReadPixels(0, 0, pw, ph, GL_RGBA, GL_UNSIGNED_BYTE, px);
     float scale_x = (float)pw / (float)app_w;
     float scale_y = (float)ph / (float)app_h;
-    for (int y = 4; y < app_h; y += 8) {
-        char line[64];
+    float step = 2.0f;
+    for (float y = 2; y < app_h; y += step) {
+        char line[512];
         int n = 0;
-        for (int x = 4; x < app_w; x += 8) {
+        for (float x = 2; x < app_w; x += step) {
             int bx = (int)(x * scale_x), by = (int)((app_h - y) * scale_y);
             unsigned char *p = px + ((size_t)by * pw + bx) * 4;
             char ch = '.';
@@ -51,7 +52,7 @@ static void dump_frame(int pw, int ph) {
             line[n++] = ch;
         }
         line[n] = 0;
-        SDL_Log("y=%3d %s", y, line);
+        SDL_Log("y=%3.0f %s", y, line);
     }
     SDL_free(px);
 }

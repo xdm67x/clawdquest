@@ -11,7 +11,7 @@ import Foundation
 import CoreGraphics
 import AppKit
 
-let CELL = 144
+let CELL = 120 // drawn 1:1 by the pet (src/pet.c), so there is no resampling
 let COLS = 3
 let ROWS = 3
 
@@ -144,6 +144,7 @@ var header = """
 #define SPR_ROWS \(ROWS)
 #define SPR_W \(W)
 #define SPR_H \(H)
+#define SPR_CELL \(CELL)
 #define SPR_B64_LEN \(b64.count)
 
 enum { \(icons.map { $0.key }.joined(separator: ", ")) };
