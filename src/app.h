@@ -14,7 +14,10 @@ extern int app_pw, app_ph;
 #define PET_W 88
 #define PET_H 92
 #define PANEL_W 340
-#define PANEL_H 404
+// The pet is bottom-anchored, so this also sets the card-to-pet gap: the card
+// ends at y=284, Clawd's cell top lands at PANEL_H-76 and his body just below
+// it. Keep it small so the two read as one unit.
+#define PANEL_H 364
 
 // Clawd's framing inside the window: feet this far above the bottom edge.
 #define PET_FEET_MARGIN 12

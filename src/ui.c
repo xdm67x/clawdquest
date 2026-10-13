@@ -2,8 +2,8 @@
 // The quest card. A rounded glass card that opens above Clawd when he is
 // clicked: level badge, XP bar, streak stats, the quest list (scrollable,
 // click a quest to run its chronometer, check to complete, x to delete),
-// an add bar, and a quit button. Popups, toasts and confetti are anchored
-// to the pet rather than a window edge.
+// an add bar, and a close (x) button. Popups, toasts and confetti are
+// anchored to the pet rather than a window edge.
 // ---------------------------------------------------------------------------
 
 #include "ui.h"
@@ -230,7 +230,7 @@ typedef struct {
 } RowHit;
 static RowHit rows[256]; // one slot per visible row (the band shows ~5)
 static int nrows;
-static Rect card_rect, band_rect, add_btn, quit_btn;
+static Rect card_rect, band_rect, add_btn, close_btn;
 
 bool ui_panel_open(void) { return panel_open; }
 bool ui_should_quit(void) { return quit_req; }
@@ -293,18 +293,22 @@ static void panel_frame(float t) {
     font_draw("Clawd Quest", ix + 40, cy + 25, 14, C_TXT, 1);
     {
         char s[48];
-        SDL_snprintf(s, sizeof s, "Lv %d · %s", lvl(S.xp), title_of(lvl(S.xp)));
+        SDL_snprintf(s, sizeof s, "Lv %d \xE2\x80\xA2 %s", lvl(S.xp), title_of(lvl(S.xp)));
         font_draw(s, ix + 40, cy + 41, 10, C_DIM, 0);
     }
 
-    // Quit button, top-right.
-    quit_btn = (Rect){ cx + cw - 14 - 48, cy + 15, 48, 20 };
-    bool q_hover = mouse_x >= quit_btn.x && mouse_x <= quit_btn.x + quit_btn.w &&
-                   mouse_y >= quit_btn.y && mouse_y <= quit_btn.y + quit_btn.h;
-    rrect(quit_btn.x, quit_btn.y, quit_btn.w, quit_btn.h, 10,
-          rgba(0xffffff, q_hover ? 0.14f : 0.07f), C_NONE, 0, rgba(0xffffff, 0.16f), 1);
-    font_draw("Quit", quit_btn.x + (quit_btn.w - font_measure("Quit", 10)) * 0.5f,
-              quit_btn.y + 14, 10, C_TXT, 0);
+    // Close button, top-right.
+    float qb = 22;
+    close_btn = (Rect){ cx + cw - 14 - qb, cy + 15, qb, qb };
+    bool q_hover = mouse_x >= close_btn.x && mouse_x <= close_btn.x + close_btn.w &&
+                   mouse_y >= close_btn.y && mouse_y <= close_btn.y + close_btn.h;
+    rrect(close_btn.x, close_btn.y, close_btn.w, close_btn.h, 8,
+          rgba(0xffffff, q_hover ? 0.18f : 0.07f), C_NONE, 0, rgba(0xffffff, 0.16f), 1);
+    {
+        const char *x = "\xC3\x97"; // × (U+00D7)
+        font_draw(x, close_btn.x + (qb - font_measure(x, 12)) * 0.5f,
+                  close_btn.y + 15, 12, q_hover ? C_WHITE : C_TXT, 0);
+    }
 
     // XP bar.
     int l = lvl(S.xp);
@@ -329,7 +333,7 @@ static void panel_frame(float t) {
         char s[96];
         char th[16];
         fmt_time_h(th, sizeof th, S.time);
-        SDL_snprintf(s, sizeof s, "%d-day streak · %ld done · %s focused", S.streak, S.total, th);
+        SDL_snprintf(s, sizeof s, "%d-day streak \xE2\x80\xA2 %ld done \xE2\x80\xA2 %s focused", S.streak, S.total, th);
         font_draw(s, ix, cy + 78, 10, C_DIM, 0);
     }
 
@@ -434,7 +438,7 @@ static void panel_frame(float t) {
 
     // Empty board notice.
     if (!S.nquests) {
-        const char *l1 = "No quests — add one below.";
+        const char *l1 = "No quests \xE2\x80\xA2 add one below.";
         font_draw(l1, cx + (cw - font_measure(l1, 11)) * 0.5f,
                   band_rect.y + band_rect.h * 0.5f + 4, 11, C_DIM, 0);
     }
@@ -586,7 +590,7 @@ static void ui_click(float x, float y) {
         }
     }
     if (in_rect(add_btn, x, y)) ui_key(SDLK_RETURN);
-    if (in_rect(quit_btn, x, y)) quit_req = true;
+    if (in_rect(close_btn, x, y)) quit_req = true;
 }
 
 void ui_mouse_down(float x, float y) {

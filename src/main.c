@@ -3,7 +3,7 @@
 //
 // A transparent, borderless, always-on-top window: Clawd lives on the
 // desktop. Drag him anywhere (the window follows the cursor); click him to
-// open the quest card above him (stats, quest list, add bar, quit). While a
+// open the quest card above him (stats, quest list, add bar, close). While a
 // chronometer runs he works; left alone he dozes off after a while.
 // ---------------------------------------------------------------------------
 

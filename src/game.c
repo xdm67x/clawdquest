@@ -193,7 +193,7 @@ void award(long amount, float x, float y) {
     ui_pop(txt, x, y);
     if (lvl(S.xp) > before) {
         char toast[80];
-        snprintf(toast, sizeof toast, "LEVEL %d — %s!", lvl(S.xp), title_of(lvl(S.xp)));
+        snprintf(toast, sizeof toast, "LEVEL %d \xE2\x80\xA2 %s!", lvl(S.xp), title_of(lvl(S.xp)));
         ui_toast(toast);
         sfx_win();
         ui_confetti(140);
