@@ -7,14 +7,14 @@
 extern int app_w, app_h;
 extern int app_pw, app_ph;
 
-#define PET_W 228
-#define PET_H 184
+#define PET_W 176
+#define PET_H 164
 #define PANEL_W 340
-#define PANEL_H 470
+#define PANEL_H 456
 
 // Clawd's framing inside the window: feet this far above the bottom edge,
 // body this many pixels tall (kept constant in both window sizes).
 #define PET_FEET_MARGIN 28
-#define PET_PX 124
+#define PET_PX 100
 // Screen-space y of the top of Clawd's head (points, y down from 0).
 #define PET_HEAD_TOP(h) ((h) - PET_FEET_MARGIN - PET_PX)

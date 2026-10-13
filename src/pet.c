@@ -110,7 +110,7 @@ static const Motion MOTION[9] = {
 };
 
 // How big the (square) sprite is drawn, in pixels.
-#define SPR_PX 150
+#define SPR_PX 120
 
 // ---------------------------------------------------------------------------
 // GL state
@@ -510,6 +510,12 @@ void pet_frame(float t, float dt) {
         // The atlas is premultiplied: blend premultiplied source-over.
         glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
                             GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        // Sample half a texel inside the cell: at the exact uv boundary the
+        // LINEAR filter would pull in the neighboring icon's edge pixels
+        // (their orange arms reach the cell border) as an orange fringe.
+        float eu = 0.5f / (float)SPR_W, ev = 0.5f / (float)SPR_H;
+        glUniform4f(spr_u_uv, u0 + eu, v0 + ev,
+                    u0 + 1.0f / SPR_COLS - eu, v0 + 1.0f / SPR_ROWS - ev);
         glUniformMatrix4fv(spr_u_mvp, 1, GL_FALSE, ortho);
         glUniformMatrix4fv(spr_u_model, 1, GL_FALSE, m);
         glUniform4f(spr_u_uv, u0, v0, u0 + 1.0f / SPR_COLS, v0 + 1.0f / SPR_ROWS);
@@ -612,7 +618,7 @@ void pet_frame(float t, float dt) {
             float p = fmodf(t * 0.22f + i * 0.33f, 1.0f);
             float a = sinf(p * (float)M_PI) * 0.8f;
             char g[2] = { zc[i], 0 };
-            font_draw(g, cx + 40.0f + i * 9.0f + p * 12.0f,
+            font_draw(g, cx + 30.0f + i * 8.0f + p * 10.0f,
                       head_top - 6.0f - p * 34.0f,
                       10.0f + i * 4.0f, (Vec4){ 0.753f, 0.729f, 1.0f, a }, 1);
         }
