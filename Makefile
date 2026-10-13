@@ -75,7 +75,13 @@ font:
 	  -I/opt/homebrew/include/freetype2 -L/opt/homebrew/opt/freetype/lib -lfreetype
 	$(BUILD)/mkfont /System/Library/Fonts/Helvetica.ttc src/font_atlas.h
 
+# Regenerate src/sprites.h from the Icons8 mood icons (needs qlmanage).
+sprites:
+	swift tools/mksprites.swift $(ICONS_DIR) src/sprites.h
+
+ICONS_DIR ?= icons
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all app font test clean
+.PHONY: all app font sprites test clean

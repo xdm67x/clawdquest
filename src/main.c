@@ -8,6 +8,7 @@
 // ---------------------------------------------------------------------------
 
 #include <SDL3/SDL.h>
+#include <ctype.h>
 
 #include "app.h"
 #include "audio.h"
@@ -38,8 +39,15 @@ static void dump_frame(int pw, int ph) {
         for (int x = 4; x < app_w; x += 8) {
             int bx = (int)(x * scale_x), by = (int)((app_h - y) * scale_y);
             unsigned char *p = px + ((size_t)by * pw + bx) * 4;
-            char ch = p[3] < 32 ? '.' : p[3] < 200 ? '+' : '#';
-            if (ch == '#' && p[0] > 200 && p[1] < 130 && p[2] < 160) ch = 'A'; // apple red
+            char ch = '.';
+            if (p[3] >= 32) {
+                if (p[0] > 180 && p[1] > 80 && p[1] < 170) ch = 'o'; // orange body
+                else if (p[0] > 200 && p[1] < 130 && p[2] < 160) ch = 'A'; // apple red
+                else if (p[0] < 80 && p[1] < 80) ch = 'k'; // dark (eyes/mouth)
+                else if (p[0] > 200 && p[1] > 200) ch = 'w'; // white
+                else ch = '?';
+                if (p[3] < 200) ch = tolower(ch);
+            }
             line[n++] = ch;
         }
         line[n] = 0;

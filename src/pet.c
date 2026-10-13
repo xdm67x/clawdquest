@@ -1,11 +1,11 @@
 // ---------------------------------------------------------------------------
-// Clawd the desktop pet — 2D renderer.
+// Clawd the desktop pet — 2D sprite renderer.
 //
-// The window is transparent, so there is no arena: just the flat pixel
-// sprite, a soft shadow, sparks, floating zZz while dozing, and the apple he
-// eats when a quest completes. One quad per pixel of the variant maps; the
-// model transform (translate/rotate/scale, in cell units) is shared by the
-// sprite, the shadow and the apple.
+// Clawd is drawn from the Icons8 mood icons packed into one RGBA atlas
+// (src/sprites.h, built by tools/mksprites.swift). The window is
+// transparent, so there is no arena: just the sprite, a soft shadow, sparks,
+// floating zZz while dozing, and the apple he eats when a quest completes.
+// Animations (bob, tilt, hop, spin, pop-in) transform the flat sprite.
 // ---------------------------------------------------------------------------
 
 #include "pet.h"
@@ -18,10 +18,38 @@
 #include "app.h"
 #include "font.h"
 #include "math.h"
+#include "sprites.h"
 
 // ---------------------------------------------------------------------------
-// Shaders: flat colored 2D quads, and 2D points (sparks).
+// Shaders: textured 2D quads (sprites), flat colored 2D triangles (shadow,
+// apple), and 2D points (sparks).
 // ---------------------------------------------------------------------------
+
+static const char *SPR_VS =
+    "#version 150\n"
+    "in vec2 a_pos;\n"
+    "in vec2 a_uv;\n"
+    "uniform mat4 u_mvp;\n"
+    "uniform mat4 u_model;\n"
+    "uniform vec4 u_uv;   // x0 y0 x1 y1\n"
+    "out vec2 v_uv;\n"
+    "void main() {\n"
+    "    v_uv = u_uv.xy + a_uv * (u_uv.zw - u_uv.xy);\n"
+    "    gl_Position = u_mvp * u_model * vec4(a_pos, 0.0, 1.0);\n"
+    "}\n";
+
+static const char *SPR_FS =
+    "#version 150\n"
+    "in vec2 v_uv;\n"
+    "uniform sampler2D u_tex;\n"
+    "uniform vec4 u_tint;\n"
+    "out vec4 frag;\n"
+    "void main() {\n"
+    // The atlas is premultiplied (so GL_LINEAR filtering has no dark
+    // fringes); the tint must premultiply the color the same way.
+    "    vec4 c = texture(u_tex, v_uv);\n"
+    "    frag = vec4(u_tint.rgb * c.rgb, u_tint.a * c.a);\n"
+    "}\n";
 
 static const char *FLAT_VS =
     "#version 150\n"
@@ -57,80 +85,45 @@ static const char *PT_VS =
 #define PT_FS FLAT_FS
 
 // ---------------------------------------------------------------------------
-// Pixel maps for Clawd's variants. C body, E eyes, L closed lids, M mouth,
-// W tooth, S floating sparks.
+// Pet states and their motion + atlas sprite.
 // ---------------------------------------------------------------------------
 
-#define MAPW 15
-#define T_ "..CCCCCCCCCCC.."
-#define EYES_ "..CCECCCCCECC.."
-#define ARMS_EYES_ "CCCCECCCCCECCCC"
-#define ARMS_ "CCCCCCCCCCCCCCC"
-#define LIDS_ "CCCCLCCCCCLCCCC"
-#define GRIN_ "CCCCCCMWMCCCCCC"
-#define MOUTH_ "CCCCCCCMCCCCCCC"
-#define OMOUTH_ "CCCCCMMMMMCCCCC"
-#define LEGS_ "...C.C...C.C..."
-#define SPARKS_AROUND_ "...S.......S..."
-#define BLANK_ "..............."
+enum { V_IDLE, V_WORK, V_DOZE, V_WAKE, V_HAPPY, V_FED, V_EAT, V_DIZZY, V_PARTY };
 
-static const char *MAPS[9][11] = {
-    { T_, T_, EYES_, ARMS_EYES_, ARMS_, T_, T_, LEGS_, LEGS_, NULL, NULL },
-    { T_, T_, T_, ARMS_EYES_, ARMS_, T_, T_, LEGS_, LEGS_, NULL, NULL },
-    { T_, T_, T_, ARMS_EYES_, MOUTH_, T_, T_, LEGS_, LEGS_, NULL, NULL },
-    { SPARKS_AROUND_, BLANK_, T_, T_, EYES_, ARMS_EYES_, ARMS_, T_, T_, LEGS_, LEGS_ },
-    { T_, T_, EYES_, ARMS_EYES_, GRIN_, T_, T_, LEGS_, LEGS_, NULL, NULL },
-    { T_, T_, T_, LIDS_, ARMS_, T_, T_, LEGS_, LEGS_, NULL, NULL },
-    { T_, T_, T_, LIDS_, GRIN_, T_, T_, LEGS_, LEGS_, NULL, NULL },
-    { T_, T_, T_, LIDS_, OMOUTH_, T_, T_, LEGS_, LEGS_, NULL, NULL },
-    { SPARKS_AROUND_, BLANK_, T_, T_, EYES_, ARMS_EYES_, ARMS_, T_, T_, LEGS_, LEGS_ },
+static const int SPR_OF[] = {
+    SPR_IDLE, SPR_WORK, SPR_DOZE, SPR_WAKE, SPR_HAPPY,
+    SPR_FED, SPR_EAT, SPR_DIZZY, SPR_PARTY,
 };
-enum { V_IDLE, V_WORK, V_DOZE, V_WAKE, V_HAPPY, V_BLINK, V_FED, V_EAT, V_DIZZY };
 
-static int map_rows(int v) {
-    for (int r = 0; r < 11; r++)
-        if (!MAPS[v][r]) return r;
-    return 11;
-}
-
+// bob: fraction of sprite height, jump: hop fraction, spin: rad/s.
 typedef struct { float bobA, bobF, tilt, jumpF, spin; } Motion;
 static const Motion MOTION[9] = {
-    [V_IDLE] = { 0.06f, 1.6f, 0.02f, 0, 0 },
-    [V_WORK] = { 0.04f, 6.0f, 0.04f, 0, 0 },
-    [V_DOZE] = { 0.05f, 0.8f, 0.06f, 0, 0 },
-    [V_WAKE] = { 0.03f, 2.0f, 0.04f, 3.0f, 0 },
-    [V_HAPPY] = { 0.02f, 1.0f, 0.03f, 5.0f, 0 },
-    [V_BLINK] = { 0.06f, 1.6f, 0.02f, 0, 0 },
-    [V_FED] = { 0.05f, 1.2f, 0.04f, 0, 0 },
-    [V_EAT] = { 0.03f, 8.0f, 0.03f, 0, 0 },
-    [V_DIZZY] = { 0.04f, 2.0f, 0.08f, 0, 2.6f },
+    [V_IDLE] = { 0.020f, 1.6f, 0.030f, 0, 0 },
+    [V_WORK] = { 0.012f, 6.0f, 0.015f, 0, 0 },
+    [V_DOZE] = { 0.025f, 0.9f, 0.045f, 0, 0 },
+    [V_WAKE] = { 0.015f, 2.0f, 0.025f, 0.12f, 0 },
+    [V_HAPPY] = { 0.010f, 1.0f, 0.020f, 0.12f, 0 },
+    [V_FED] = { 0.018f, 1.2f, 0.030f, 0, 0 },
+    [V_EAT] = { 0.012f, 8.0f, 0.020f, 0, 0 },
+    [V_DIZZY] = { 0.015f, 2.0f, 0.050f, 0, 1.2f },
+    [V_PARTY] = { 0.010f, 1.5f, 0.025f, 0.10f, 0 },
 };
 
-// The apple: S stem, G leaf, R red, H highlight (5x5).
-#define APPLE_ROWS 5
-static const char *APPLE[APPLE_ROWS] = {
-    "..S..",
-    ".GS..",
-    ".HRR.",
-    "RRRRR",
-    ".RRR.",
-};
+// How big the (square) sprite is drawn, in pixels.
+#define SPR_PX 150
 
 // ---------------------------------------------------------------------------
 // GL state
 // ---------------------------------------------------------------------------
 
-// One quad mesh per pixel map (variants, apple), and its palette.
-typedef struct { GLuint vbo, ibo; int nidx; } MapMesh;
-typedef struct { char ch; int hex; } PixPal;
-
-static GLuint flat_prog, pt_prog;
+static GLuint spr_prog, flat_prog, pt_prog;
+static GLint spr_u_mvp, spr_u_model, spr_u_uv, spr_u_tint, spr_u_tex;
 static GLint flat_u_mvp, flat_u_model, pt_u_mvp;
-static GLuint sparks_vbo;
+static GLuint spr_tex, spr_vbo;
 static GLuint shadow_vbo;
-
-static MapMesh variant[9];
-static MapMesh apple;
+static GLuint apple_vbo;
+static int apple_nverts;
+static GLuint sparks_vbo;
 
 #define SPARK_N 160
 static float sp_x[SPARK_N], sp_y[SPARK_N], sp_vx[SPARK_N], sp_vy[SPARK_N], sp_life[SPARK_N];
@@ -151,50 +144,21 @@ static float feed_t;
 
 static float rnd(void) { return (float)rand() / (float)RAND_MAX; }
 
-// Build a 2D quad mesh from a pixel map: one quad (2 tris) per non-empty
-// pixel, positions in cell units (x: column, y: row from the top).
-static void build_map(const char *map[], int rows, int mapw,
-                      const PixPal pal[], int npal,
-                      MapMesh *out) {
-    float *verts = SDL_calloc((size_t)(mapw * rows) * 4 * 6, sizeof(float));
-    unsigned *idx = SDL_calloc((size_t)(mapw * rows) * 6, sizeof(unsigned));
-    int nv = 0, ni = 0;
-    for (int r = 0; r < rows; r++) {
-        for (int c = 0; c < mapw && map[r][c]; c++) {
-            char ch = map[r][c];
-            if (ch == '.') continue;
-            Vec3 col = { 1, 0, 1 };
-            for (int p = 0; p < npal; p++)
-                if (pal[p].ch == ch) { col = hex3(pal[p].hex); break; }
-            const float q[4][6] = {
-                { (float)c, (float)r, col.x, col.y, col.z, 1 },
-                { (float)c + 1, (float)r, col.x, col.y, col.z, 1 },
-                { (float)c + 1, (float)r + 1, col.x, col.y, col.z, 1 },
-                { (float)c, (float)r + 1, col.x, col.y, col.z, 1 },
-            };
-            unsigned base = (unsigned)nv;
-            for (int k = 0; k < 4; k++) {
-                float *o = verts + nv * 6;
-                for (int f = 0; f < 6; f++) o[f] = q[k][f];
-                nv++;
-            }
-            idx[ni++] = base + 0;
-            idx[ni++] = base + 1;
-            idx[ni++] = base + 2;
-            idx[ni++] = base + 0;
-            idx[ni++] = base + 2;
-            idx[ni++] = base + 3;
-        }
-    }
-    glGenBuffers(1, &out->vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, out->vbo);
-    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(nv * 6 * sizeof(float)), verts, GL_STATIC_DRAW);
-    glGenBuffers(1, &out->ibo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, out->ibo);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(ni * sizeof(unsigned)), idx, GL_STATIC_DRAW);
-    out->nidx = ni;
-    SDL_free(verts);
-    SDL_free(idx);
+static int b64_val(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+// Push one flat triangle (x, y, r, g, b, a per vertex) into a growing buffer.
+static int push_tri(float *v, int n, const float t[3][6]) {
+    for (int k = 0; k < 3; k++)
+        for (int f = 0; f < 6; f++)
+            v[(n + k) * 6 + f] = t[k][f];
+    return n + 3;
 }
 
 // ---------------------------------------------------------------------------
@@ -202,43 +166,154 @@ static void build_map(const char *map[], int rows, int mapw,
 // ---------------------------------------------------------------------------
 
 void pet_init(void) {
+    static const char *spr_attribs[] = { "a_pos", "a_uv", NULL };
     static const char *flat_attribs[] = { "a_pos", "a_col", NULL };
     static const char *pt_attribs[] = { "a_pos", "a_col", "a_size", NULL };
+    spr_prog = gl_program_at(SPR_VS, SPR_FS, spr_attribs);
+    spr_u_mvp = glGetUniformLocation(spr_prog, "u_mvp");
+    spr_u_model = glGetUniformLocation(spr_prog, "u_model");
+    spr_u_uv = glGetUniformLocation(spr_prog, "u_uv");
+    spr_u_tint = glGetUniformLocation(spr_prog, "u_tint");
+    spr_u_tex = glGetUniformLocation(spr_prog, "u_tex");
     flat_prog = gl_program_at(FLAT_VS, FLAT_FS, flat_attribs);
     flat_u_mvp = glGetUniformLocation(flat_prog, "u_mvp");
     flat_u_model = glGetUniformLocation(flat_prog, "u_model");
     pt_prog = gl_program_at(PT_VS, PT_FS, pt_attribs);
     pt_u_mvp = glGetUniformLocation(pt_prog, "u_mvp");
 
-    static const PixPal PAL[] = {
-        { 'C', 0xde886d }, { 'E', 0x1a0e08 }, { 'L', 0x1a0e08 },
-        { 'M', 0x2b120a }, { 'W', 0xfff3e8 }, { 'S', 0xffbd2e },
-    };
-    for (int v = 0; v < 9; v++)
-        build_map(MAPS[v], map_rows(v), MAPW, PAL, 6, &variant[v]);
-
-    static const PixPal APAL[] = {
-        { 'S', 0x6b3f1d }, { 'G', 0x3ddc97 }, { 'R', 0xff4d6d }, { 'H', 0xff8098 },
-    };
-    build_map(APPLE, APPLE_ROWS, 5, APAL, 4, &apple);
-
-    // Soft shadow: a squashed fan, alpha fading from the center to the rim.
-    // Built in cell units (radius ~6.5 cells wide, 2.2 tall).
+    // Decode the base64 atlas into an RGBA texture.
     {
-        int n = 34 * 6;
-        float *verts = SDL_calloc((size_t)n, sizeof(float));
-        int o = 0;
-        verts[o++] = 0; verts[o++] = 0; verts[o++] = 0; verts[o++] = 0; verts[o++] = 0; verts[o++] = 0.22f;
-        for (int i = 0; i <= 32; i++) {
-            float a = (float)i / 32 * 2.0f * (float)M_PI;
-            verts[o++] = cosf(a) * 6.5f;
-            verts[o++] = sinf(a) * 2.0f;
-            verts[o++] = 0; verts[o++] = 0; verts[o++] = 0; verts[o++] = 0;
+        int nb = SPR_B64_LEN / 4 * 3;
+        unsigned char *px = SDL_malloc((size_t)nb);
+        for (int i = 0, o = 0; i < SPR_B64_LEN; i += 4) {
+            int v0 = b64_val(SPR_B64[i]), v1 = b64_val(SPR_B64[i + 1]);
+            int v2 = b64_val(SPR_B64[i + 2]), v3 = b64_val(SPR_B64[i + 3]);
+            unsigned v = (unsigned)v0 << 18 | (unsigned)v1 << 12 | (unsigned)v2 << 6 | (unsigned)v3;
+            px[o++] = (unsigned char)(v >> 16);
+            if (SPR_B64[i + 2] != '=') px[o++] = (unsigned char)(v >> 8);
+            if (SPR_B64[i + 3] != '=') px[o++] = (unsigned char)v;
+        }
+        glGenTextures(1, &spr_tex);
+        glBindTexture(GL_TEXTURE_2D, spr_tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SPR_W, SPR_H, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, px);
+        SDL_free(px);
+    }
+
+    // Sprite quad: 2 tris, unit square, uv 0..1.
+    {
+        const float q[6][4] = {
+            { 0, 0, 0, 0 }, { 1, 0, 1, 0 }, { 1, 1, 1, 1 },
+            { 0, 0, 0, 0 }, { 1, 1, 1, 1 }, { 0, 1, 0, 1 },
+        };
+        glGenBuffers(1, &spr_vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, spr_vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof q, q, GL_STATIC_DRAW);
+    }
+
+    // Soft shadow: a squashed fan, alpha fading from the center to the rim
+    // (positions in apple-cell units; scaled by `cell` at draw time).
+    {
+        float v[34 * 3 * 6];
+        int n = 0;
+        float tri[3][6] = {
+            { 0, 0, 0, 0, 0, 0.22f },
+            { 0, 0, 0, 0, 0, 0 },
+            { 0, 0, 0, 0, 0, 0 },
+        };
+        for (int i = 0; i < 32; i++) {
+            float a0 = (float)i / 32 * 2.0f * (float)M_PI;
+            float a1 = (float)(i + 1) / 32 * 2.0f * (float)M_PI;
+            tri[1][0] = cosf(a0) * 3.6f; tri[1][1] = sinf(a0) * 1.1f;
+            tri[2][0] = cosf(a1) * 3.6f; tri[2][1] = sinf(a1) * 1.1f;
+            n = push_tri(v, n, tri);
         }
         glGenBuffers(1, &shadow_vbo);
         glBindBuffer(GL_ARRAY_BUFFER, shadow_vbo);
-        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(o * sizeof(float)), verts, GL_STATIC_DRAW);
-        SDL_free(verts);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(n * 6 * sizeof(float)), v, GL_STATIC_DRAW);
+    }
+
+    // The apple: body + highlight discs, stem and leaf quads, in apple-local
+    // units (body radius 1). All one mesh, colored per vertex.
+    {
+        float v[256 * 6];
+        int n = 0;
+        static const Vec3 RED = { 1.0f, 0.302f, 0.427f };    // 0xff4d6d
+        static const Vec3 HI = { 1.0f, 0.502f, 0.596f };     // 0xff8098
+        static const Vec3 STEM = { 0.42f, 0.247f, 0.114f }; // 0x6b3f1d
+        static const Vec3 LEAF = { 0.239f, 0.863f, 0.592f };  // 0x3ddc97
+        float tri[3][6];
+        // Body: a slightly egg-shaped fan (wider at the bottom).
+        for (int i = 0; i < 24; i++) {
+            float a0 = (float)i / 24 * 2.0f * (float)M_PI;
+            float a1 = (float)(i + 1) / 24 * 2.0f * (float)M_PI;
+            float r0 = 1.0f - 0.12f * sinf(a0);
+            float r1 = 1.0f - 0.12f * sinf(a1);
+            const float pts[3][3] = {
+                { 0, -0.15f, r0 }, { cosf(a0) * r0, -0.15f + sinf(a0) * r0, 0 }, { cosf(a1) * r1, -0.15f + sinf(a1) * r1, 0 },
+            };
+            for (int k = 0; k < 3; k++) {
+                tri[k][0] = pts[k][0];
+                tri[k][1] = pts[k][1];
+                tri[k][2] = RED.x; tri[k][3] = RED.y; tri[k][4] = RED.z; tri[k][5] = 1;
+            }
+            n = push_tri(v, n, tri);
+        }
+        // Highlight spot, upper left.
+        for (int i = 0; i < 12; i++) {
+            float a0 = (float)i / 12 * 2.0f * (float)M_PI;
+            float a1 = (float)(i + 1) / 12 * 2.0f * (float)M_PI;
+            const float pts[3][3] = {
+                { -0.42f, 0.35f, 0.24f },
+                { -0.42f + cosf(a0) * 0.24f, 0.35f + sinf(a0) * 0.24f, 0 },
+                { -0.42f + cosf(a1) * 0.24f, 0.35f + sinf(a1) * 0.24f, 0 },
+            };
+            for (int k = 0; k < 3; k++) {
+                tri[k][0] = pts[k][0];
+                tri[k][1] = pts[k][1];
+                tri[k][2] = HI.x; tri[k][3] = HI.y; tri[k][4] = HI.z; tri[k][5] = 1;
+            }
+            n = push_tri(v, n, tri);
+        }
+        // Stem.
+        {
+            const float pts[3][3] = { { 0, 0.78f, 0 }, { 0.09f, 1.05f, 0 }, { -0.09f, 1.05f, 0 } };
+            for (int k = 0; k < 3; k++) {
+                tri[k][0] = pts[k][0]; tri[k][1] = pts[k][1];
+                tri[k][2] = STEM.x; tri[k][3] = STEM.y; tri[k][4] = STEM.z; tri[k][5] = 1;
+            }
+            n = push_tri(v, n, tri);
+            const float pts2[3][3] = { { 0, 0.78f, 0 }, { 0.14f, 0.82f, 0 }, { 0.09f, 1.05f, 0 } };
+            for (int k = 0; k < 3; k++) {
+                tri[k][0] = pts2[k][0]; tri[k][1] = pts2[k][1];
+                tri[k][2] = STEM.x; tri[k][3] = STEM.y; tri[k][4] = STEM.z; tri[k][5] = 1;
+            }
+            n = push_tri(v, n, tri);
+        }
+        // Leaf, tilted beside the stem.
+        {
+            const float pts[3][3] = { { 0.16f, 1.02f, 0 }, { 0.62f, 1.06f, 0 }, { 0.30f, 1.22f, 0 } };
+            for (int k = 0; k < 3; k++) {
+                tri[k][0] = pts[k][0]; tri[k][1] = pts[k][1];
+                tri[k][2] = LEAF.x; tri[k][3] = LEAF.y; tri[k][4] = LEAF.z; tri[k][5] = 1;
+            }
+            n = push_tri(v, n, tri);
+            const float pts2[3][3] = { { 0.16f, 1.02f, 0 }, { 0.44f, 0.92f, 0 }, { 0.62f, 1.06f, 0 } };
+            for (int k = 0; k < 3; k++) {
+                tri[k][0] = pts2[k][0]; tri[k][1] = pts2[k][1];
+                tri[k][2] = LEAF.x; tri[k][3] = LEAF.y; tri[k][4] = LEAF.z; tri[k][5] = 1;
+            }
+            n = push_tri(v, n, tri);
+        }
+        apple_nverts = n;
+        glGenBuffers(1, &apple_vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, apple_vbo);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(n * 6 * sizeof(float)), v, GL_STATIC_DRAW);
     }
 
     glGenBuffers(1, &sparks_vbo);
@@ -282,7 +357,7 @@ void pet_feed(void) {
 }
 
 void pet_win(void) {
-    cameo(V_HAPPY, V_FED, 2200, (float)SDL_GetTicks() / 1000.0f);
+    cameo(V_PARTY, V_FED, 2200, (float)SDL_GetTicks() / 1000.0f);
     burst(20, 0xff4d6d);
     burst(20, 0x3ddc97);
     burst(20, 0xffbd2e);
@@ -323,15 +398,6 @@ static void bind_flat_attribs(void) {
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, stride, (void *)(2 * sizeof(float)));
 }
 
-// Draw a map mesh with the given model transform.
-static void draw_mesh(MapMesh *m, Mat4 model) {
-    glUniformMatrix4fv(flat_u_model, 1, GL_FALSE, model);
-    glBindBuffer(GL_ARRAY_BUFFER, m->vbo);
-    bind_flat_attribs();
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m->ibo);
-    glDrawElements(GL_TRIANGLES, m->nidx, GL_UNSIGNED_INT, NULL);
-}
-
 void pet_frame(float t, float dt) {
     Mat4 ortho;
     m4_ortho(ortho, (float)app_w, (float)app_h);
@@ -368,27 +434,24 @@ void pet_frame(float t, float dt) {
         }
     }
 
-    // Blinking: a brief closed-eye frame while awake.
+    // A quick squash "blink" now and then while awake.
     if (shown == V_IDLE || shown == V_WORK) {
         if (blink_on > 0) {
             blink_on -= dt;
         } else {
             blink_t -= dt;
             if (blink_t <= 0) {
-                blink_on = 0.13f;
+                blink_on = 0.14f;
                 blink_t = 2.5f + rnd() * 4.0f;
             }
         }
     }
     int disp = shown;
     if (feed_state == 2) disp = V_EAT;
-    else if (blink_on > 0 && (shown == V_IDLE || shown == V_WORK)) disp = V_BLINK;
 
-    // Layout: feet on the bottom margin, sprite 9 rows tall (PET_PX px).
-    float cell = (float)PET_PX / 9.0f;
+    // Layout: sprite feet on the bottom margin.
     float cx = app_w * 0.5f;
     float feet_y = (float)app_h - (float)PET_FEET_MARGIN;
-    int rows = map_rows(disp);
 
     const Motion M = MOTION[disp];
     phase += dt;
@@ -397,59 +460,90 @@ void pet_frame(float t, float dt) {
     float pop = 1 - powf(1 - pop_t, 3);
 
     float bob = sinf(phase * M.bobF) * M.bobA;
-    if (M.jumpF) bob += fabsf(sinf(phase * M.jumpF)) * 0.35f;
-    // Chomping squash.
-    if (feed_state == 2) bob += 0.05f * fabsf(sinf(feed_t * 22.0f));
+    if (M.jumpF) bob += fabsf(sinf(phase * M.jumpF)) * M.jumpF;
+    if (feed_state == 2) bob += 0.012f * fabsf(sinf(feed_t * 22.0f)); // chomp wobble
     spin_acc += M.spin * dt;
     float rotz = sinf(phase * 1.1f) * M.tilt;
 
-    // Model: feet-centered cell grid, scaled to pixels, placed on screen.
-    Mat4 model, t_, rz, s_;
-    m4_translate(t_, -7.5f, (float)-rows, 0);
-    m4_rotZ(rz, rotz);
-    m4_scale(s_, cell * pop, cell * pop, 1);
-    m4_mul(model, rz, t_);
-    m4_mul(model, s_, model);
-    m4_translate(t_, cx, feet_y - bob * cell, 0);
-    m4_mul(model, t_, model);
+    float sx = pop, sy = pop;
+    if (blink_on > 0 && (shown == V_IDLE || shown == V_WORK)) {
+        sx *= 1.04f;
+        sy *= 0.90f;
+    }
 
-    glUseProgram(flat_prog);
-    glUniformMatrix4fv(flat_u_mvp, 1, GL_FALSE, ortho);
     glEnable(GL_BLEND);
     // Source-over: alpha must accumulate as coverage (a out = a + dst.a*(1-a)),
     // or the shadow would end up nearly invisible on the desktop.
     glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                         GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-    // --- Shadow ----------------------------------------------------------------
+    // --- Shadow (drawn under the sprite, in PET_PX cell units) ---------------
+    float cell = (float)PET_PX / 9.0f;
     {
-        Mat4 sm, s_;
+        Mat4 m, s_, t_;
         m4_scale(s_, cell, cell, 1);
-        m4_translate(t_, cx, feet_y + 0.35f * cell, 0);
-        m4_mul(sm, t_, s_);
-        glUniformMatrix4fv(flat_u_model, 1, GL_FALSE, sm);
+        m4_translate(t_, cx, feet_y + 0.3f, 0);
+        m4_mul(m, t_, s_);
+        glUseProgram(flat_prog);
+        glUniformMatrix4fv(flat_u_mvp, 1, GL_FALSE, ortho);
+        glUniformMatrix4fv(flat_u_model, 1, GL_FALSE, m);
         glBindBuffer(GL_ARRAY_BUFFER, shadow_vbo);
         bind_flat_attribs();
-        glDrawArrays(GL_TRIANGLE_FAN, 0, 34);
+        glDrawArrays(GL_TRIANGLES, 0, 32 * 3);
     }
 
     // --- Clawd -----------------------------------------------------------------
-    draw_mesh(&variant[disp], model);
+    {
+        Mat4 m, t_, rz, s_;
+        m4_translate(t_, -0.5f, -1.0f, 0); // bottom-center pivot
+        m4_rotZ(rz, rotz);
+        m4_mul(m, rz, t_);
+        m4_scale(s_, (float)SPR_PX * sx, (float)SPR_PX * sy, 1);
+        m4_mul(m, s_, m);
+        m4_translate(t_, cx, feet_y - bob * (float)SPR_PX, 0);
+        m4_mul(m, t_, m);
+
+        int spr = SPR_OF[disp];
+        float u0 = (float)(spr % SPR_COLS) / SPR_COLS;
+        float v0 = (float)(spr / SPR_COLS) / SPR_ROWS;
+        glUseProgram(spr_prog);
+        // The atlas is premultiplied: blend premultiplied source-over.
+        glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
+                            GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        glUniformMatrix4fv(spr_u_mvp, 1, GL_FALSE, ortho);
+        glUniformMatrix4fv(spr_u_model, 1, GL_FALSE, m);
+        glUniform4f(spr_u_uv, u0, v0, u0 + 1.0f / SPR_COLS, v0 + 1.0f / SPR_ROWS);
+        glUniform4f(spr_u_tint, 1, 1, 1, 1);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, spr_tex);
+        glUniform1i(spr_u_tex, 0);
+        glBindBuffer(GL_ARRAY_BUFFER, spr_vbo);
+        GLsizei stride = 4 * sizeof(float);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, (void *)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (void *)(2 * sizeof(float)));
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glDisableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
+        // Back to straight alpha for the flat meshes below.
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                            GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    }
 
     // --- The apple -------------------------------------------------------------
     if (feed_state) {
-        // Mouth position (variant rows are laid out top-down; the mouth sits
-        // around row 4.5).
-        float mouth_x = cx + 1.0f * cell;
-        float mouth_y = feet_y - 4.5f * cell;
         float ax, ay, ascale = 1.0f, arot = 0;
+        // The mouth is around 44% up the sprite.
+        float mouth_x = cx + (float)SPR_PX * 0.06f;
+        float mouth_y = feet_y - (float)SPR_PX * 0.44f;
         if (feed_state == 1) {
             float p = feed_t / 0.6f;
             if (p > 1) p = 1;
             float ease = 1 - powf(1 - p, 3);
-            float sx = cx + 34.0f, sy = feet_y + 26.0f;
-            ax = sx + (mouth_x - sx) * ease + sinf(p * (float)M_PI) * 14.0f;
-            ay = sy + (mouth_y - sy) * ease;
+            float sx0 = cx + 40.0f, sy0 = feet_y + 24.0f;
+            ax = sx0 + (mouth_x - sx0) * ease + sinf(p * (float)M_PI) * 14.0f;
+            ay = sy0 + (mouth_y - sy0) * ease;
             arot = sinf(p * (float)M_PI * 2.0f) * 0.4f;
         } else {
             ax = mouth_x;
@@ -457,15 +551,21 @@ void pet_frame(float t, float dt) {
             ascale = 1.0f - feed_t / 0.75f; // each chomp takes a bite
             arot = sinf(feed_t * 22.0f) * 0.15f;
         }
-        Mat4 am;
-        m4_translate(t_, -2.5f, -2.5f, 0); // center the 5x5 map
+        float s = cell * 0.78f * ascale;
+        Mat4 m, t_, rz, s_;
         m4_rotZ(rz, arot);
-        m4_mul(am, rz, t_);
-        m4_scale(s_, cell * 0.95f * ascale, cell * 0.95f * ascale, 1);
-        m4_mul(am, s_, am);
+        m4_scale(s_, s, s, 1);
+        m4_mul(m, s_, rz);
         m4_translate(t_, ax, ay, 0);
-        m4_mul(am, t_, am);
-        draw_mesh(&apple, am);
+        m4_mul(m, t_, m);
+        glUseProgram(flat_prog);
+        glUniformMatrix4fv(flat_u_mvp, 1, GL_FALSE, ortho);
+        glUniformMatrix4fv(flat_u_model, 1, GL_FALSE, m);
+        glBindBuffer(GL_ARRAY_BUFFER, apple_vbo);
+        bind_flat_attribs();
+        glDrawArrays(GL_TRIANGLES, 0, apple_nverts);
+        glDisableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
     }
 
     // --- Sparks ----------------------------------------------------------------
@@ -503,8 +603,6 @@ void pet_frame(float t, float dt) {
         glDrawArrays(GL_POINTS, 0, nsp);
         glDisableVertexAttribArray(2);
     }
-    glDisableVertexAttribArray(0);
-    glDisableVertexAttribArray(1);
 
     // --- zZz while dozing -------------------------------------------------------
     if (shown == V_DOZE) {
