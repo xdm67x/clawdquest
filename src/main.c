@@ -388,6 +388,24 @@ int main(int argc, char **argv) {
         ui_frame(t, dt);
 
         if (SDL_getenv("CLAWDQUEST_DUMP") && frames == 60) dump_frame(app_pw, app_ph);
+        // Debug aid (CLAWDQUEST_CLICK="x y"): post one left click at (x, y)
+        // through the real event queue. Synthesizing OS-level clicks needs
+        // Accessibility permission; this exercises the same handler path.
+        if (frames == 30) {
+            const char *cl = SDL_getenv("CLAWDQUEST_CLICK");
+            float ccx = 0, ccy = 0;
+            if (cl && SDL_sscanf(cl, "%f %f", &ccx, &ccy) == 2) {
+                SDL_Event ev;
+                SDL_zero(ev);
+                ev.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+                ev.button.button = SDL_BUTTON_LEFT; ev.button.x = ccx; ev.button.y = ccy; ev.button.clicks = 1;
+                SDL_PushEvent(&ev);
+                SDL_zero(ev);
+                ev.type = SDL_EVENT_MOUSE_BUTTON_UP;
+                ev.button.button = SDL_BUTTON_LEFT; ev.button.x = ccx; ev.button.y = ccy; ev.button.clicks = 1;
+                SDL_PushEvent(&ev);
+            }
+        }
         frames++;
 
         SDL_GL_SwapWindow(win);

@@ -217,8 +217,10 @@ static float mouse_x = -1, mouse_y = -1;
 
 // Quest list scrolling: the target is authoritative (wheel and drag set it).
 static float target_scroll;
-static bool dragging;
-static float drag_y0, drag_scroll0;
+static bool card_pressed;   // a press started on the card (released = click)
+static bool dragging;       // ...and on the scroll band, so rows follow the finger
+static float drag_scroll0;
+static float press_x0, press_y0;
 static bool drag_moved;
 
 typedef struct {
@@ -595,16 +597,19 @@ static void ui_click(float x, float y) {
 
 void ui_mouse_down(float x, float y) {
     if (!panel_open) return;
+    card_pressed = true;
+    drag_moved = false;
+    press_x0 = x;
+    press_y0 = y;
+    drag_scroll0 = target_scroll;
     dragging = x >= band_rect.x && x <= band_rect.x + band_rect.w &&
                y >= band_rect.y && y <= band_rect.y + band_rect.h;
-    drag_moved = false;
-    drag_y0 = y;
-    drag_scroll0 = target_scroll;
 }
 
 void ui_mouse_up(float x, float y) {
     // A press that stayed put is a click; a drag suppresses the click.
-    if (dragging && !drag_moved && panel_open) ui_click(x, y);
+    if (card_pressed && !drag_moved && panel_open) ui_click(x, y);
+    card_pressed = false;
     dragging = false;
 }
 
@@ -618,10 +623,10 @@ void ui_wheel(float dy) {
 void ui_motion(float x, float y) {
     mouse_x = x;
     mouse_y = y;
-    if (dragging) {
-        float dy = y - drag_y0;
-        if (dy > 6 || dy < -6) drag_moved = true;
-        if (drag_moved) target_scroll = drag_scroll0 - dy; // rows follow the finger
+    if (card_pressed) {
+        float dx = x - press_x0, dy = y - press_y0;
+        if (dx > 6 || dx < -6 || dy > 6 || dy < -6) drag_moved = true;
+        if (dragging && drag_moved) target_scroll = drag_scroll0 - dy; // rows follow the finger
     }
 }
 
