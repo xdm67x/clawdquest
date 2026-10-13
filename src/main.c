@@ -31,6 +31,30 @@ static void dump_frame(int pw, int ph) {
     unsigned char *px = SDL_malloc((size_t)pw * (size_t)ph * 4);
     if (!px) return;
     glReadPixels(0, 0, pw, ph, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    // The exact outer border (1px) of the framebuffer, raw.
+    {
+        char line[2048];
+        int n = 0;
+        unsigned char *p;
+        n += SDL_snprintf(line + n, sizeof line - n, "border");
+        for (int x = 0; x < pw; x++) { // bottom row
+            p = px + ((size_t)x) * 4;
+            if (p[3] > 0) n += SDL_snprintf(line + n, sizeof line - n, " B%d:%02x%02x%02x%02x", x, p[0], p[1], p[2], p[3]);
+        }
+        for (int x = 0; x < pw; x++) { // top row
+            p = px + ((size_t)(ph - 1) * pw + x) * 4;
+            if (p[3] > 0) n += SDL_snprintf(line + n, sizeof line - n, " T%d:%02x%02x%02x%02x", x, p[0], p[1], p[2], p[3]);
+        }
+        for (int y = 0; y < ph; y++) { // left column
+            p = px + ((size_t)y * pw) * 4;
+            if (p[3] > 0) n += SDL_snprintf(line + n, sizeof line - n, " L%d:%02x%02x%02x%02x", y, p[0], p[1], p[2], p[3]);
+        }
+        for (int y = 0; y < ph; y++) { // right column
+            p = px + ((size_t)(y * pw + pw - 1)) * 4;
+            if (p[3] > 0) n += SDL_snprintf(line + n, sizeof line - n, " R%d:%02x%02x%02x%02x", y, p[0], p[1], p[2], p[3]);
+        }
+        SDL_Log("%s", line);
+    }
     float scale_x = (float)pw / (float)app_w;
     float scale_y = (float)ph / (float)app_h;
     float step = 2.0f;
