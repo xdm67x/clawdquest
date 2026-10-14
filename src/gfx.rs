@@ -663,7 +663,7 @@ impl Gfx {
 
     /// The sprite: a unit quad transformed by `model` (on the CPU — the same
     /// approach as the font glyphs), uv-remapped into the atlas cell.
-    pub fn draw_sprite(&mut self, model: Mat4, uv: [f32; 4], _tint: Vec4) {
+    pub fn draw_sprite(&mut self, model: Mat4, uv: [f32; 4]) {
         let corners = [(0.0f32, 0.0f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         let mut px = [[0.0f32; 2]; 4];
         let mut uvs = [[0.0f32; 2]; 4];

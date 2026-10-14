@@ -7,10 +7,12 @@
 //! tilt, hop, spin, pop-in) transform the flat sprite. Sparks are CPU-expanded
 //! quads (wgpu has no per-point size).
 
+use std::f32::consts::{PI, TAU};
+
 use crate::app::{PET_FEET_MARGIN, PET_SPR, pet_head_top};
 use crate::font::{Font, b64_decode};
 use crate::gfx::{FlatVert, Gfx};
-use crate::math::{Rng, Vec3, Vec4, hex3, m4_mul, m4_rot_z, m4_scale, m4_translate};
+use crate::math::{Rng, Vec3, Vec4, hex3, m4_identity, m4_mul, m4_rot_z, m4_scale, m4_translate};
 
 pub const SPRITES_B64: &str = include_str!("assets/sprites.b64");
 
@@ -183,126 +185,118 @@ pub struct Pet {
     h: f32,
 }
 
+/// Soft shadow: a squashed fan, alpha fading from the center to the rim
+/// (positions in apple-cell units; scaled by `cell` at draw time).
+fn build_shadow() -> Vec<FlatVert> {
+    const CENTER: [f32; 4] = [0.0, 0.0, 0.0, 0.22];
+    const RIM: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+    let mut verts = Vec::with_capacity(32 * 3);
+    for i in 0..32 {
+        let a0 = i as f32 / 32.0 * TAU;
+        let a1 = (i + 1) as f32 / 32.0 * TAU;
+        let (s0, c0) = a0.sin_cos();
+        let (s1, c1) = a1.sin_cos();
+        verts.push(FlatVert {
+            pos: [0.0, 0.0],
+            col: CENTER,
+        });
+        verts.push(FlatVert {
+            pos: [c0 * 3.6, s0 * 1.1],
+            col: RIM,
+        });
+        verts.push(FlatVert {
+            pos: [c1 * 3.6, s1 * 1.1],
+            col: RIM,
+        });
+    }
+    verts
+}
+
+/// The apple: body + highlight discs, stem and leaf quads, in apple-local
+/// units (body radius 1). All one mesh, colored per vertex.
+fn build_apple() -> Vec<FlatVert> {
+    const RED: Vec3 = Vec3 {
+        x: 1.0,
+        y: 0.302,
+        z: 0.427,
+    }; // 0xff4d6d
+    const HI: Vec3 = Vec3 {
+        x: 1.0,
+        y: 0.502,
+        z: 0.596,
+    }; // 0xff8098
+    const STEM: Vec3 = Vec3 {
+        x: 0.42,
+        y: 0.247,
+        z: 0.114,
+    }; // 0x6b3f1d
+    const LEAF: Vec3 = Vec3 {
+        x: 0.239,
+        y: 0.863,
+        z: 0.592,
+    }; // 0x3ddc97
+
+    let mut verts: Vec<FlatVert> = Vec::with_capacity(256);
+    let tri = |pts: [[f32; 2]; 3], c: Vec3, v: &mut Vec<FlatVert>| {
+        for p in pts {
+            v.push(FlatVert {
+                pos: [p[0], p[1]],
+                col: [c.x, c.y, c.z, 1.0],
+            });
+        }
+    };
+    // Body: a slightly egg-shaped fan (wider at the bottom).
+    for i in 0..24 {
+        let a0 = i as f32 / 24.0 * TAU;
+        let a1 = (i + 1) as f32 / 24.0 * TAU;
+        let (s0, c0) = a0.sin_cos();
+        let (s1, c1) = a1.sin_cos();
+        let r0 = 1.0 - 0.12 * s0;
+        let r1 = 1.0 - 0.12 * s1;
+        tri(
+            [
+                [0.0, -0.15],
+                [c0 * r0, -0.15 + s0 * r0],
+                [c1 * r1, -0.15 + s1 * r1],
+            ],
+            RED,
+            &mut verts,
+        );
+    }
+    // Highlight spot, upper left.
+    for i in 0..12 {
+        let a0 = i as f32 / 12.0 * TAU;
+        let a1 = (i + 1) as f32 / 12.0 * TAU;
+        let (s0, c0) = a0.sin_cos();
+        let (s1, c1) = a1.sin_cos();
+        tri(
+            [
+                [-0.42, 0.35],
+                [-0.42 + c0 * 0.24, 0.35 + s0 * 0.24],
+                [-0.42 + c1 * 0.24, 0.35 + s1 * 0.24],
+            ],
+            HI,
+            &mut verts,
+        );
+    }
+    // Stem.
+    tri([[0.0, 0.78], [0.09, 1.05], [-0.09, 1.05]], STEM, &mut verts);
+    tri([[0.0, 0.78], [0.14, 0.82], [0.09, 1.05]], STEM, &mut verts);
+    // Leaf, tilted beside the stem.
+    tri([[0.16, 1.02], [0.62, 1.06], [0.30, 1.22]], LEAF, &mut verts);
+    tri([[0.16, 1.02], [0.44, 0.92], [0.62, 1.06]], LEAF, &mut verts);
+    verts
+}
+
 impl Pet {
     pub fn new() -> Self {
         debug_assert!(
             SPR_CELL as f32 >= PET_SPR && SPR_CELL.is_multiple_of(PET_SPR as u32),
             "atlas cell must be an integer multiple of PET_SPR"
         );
-        // Soft shadow: a squashed fan, alpha fading from the center to the
-        // rim (positions in apple-cell units; scaled by `cell` at draw time).
-        let mut shadow_verts = Vec::with_capacity(32 * 3);
-        let center = [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.22];
-        for i in 0..32 {
-            let a0 = i as f32 / 32.0 * std::f32::consts::TAU;
-            let a1 = (i + 1) as f32 / 32.0 * std::f32::consts::TAU;
-            let (s0, c0) = a0.sin_cos();
-            let (s1, c1) = a1.sin_cos();
-            shadow_verts.push(FlatVert {
-                pos: [0.0, 0.0],
-                col: [center[2], center[3], center[4], center[5]],
-            });
-            shadow_verts.push(FlatVert {
-                pos: [c0 * 3.6, s0 * 1.1],
-                col: [0.0, 0.0, 0.0, 0.0],
-            });
-            shadow_verts.push(FlatVert {
-                pos: [c1 * 3.6, s1 * 1.1],
-                col: [0.0, 0.0, 0.0, 0.0],
-            });
-        }
-
-        // The apple: body + highlight discs, stem and leaf quads, in
-        // apple-local units (body radius 1). All one mesh, colored per vertex.
-        let mut apple_verts: Vec<FlatVert> = Vec::with_capacity(256);
-        const RED: Vec3 = Vec3 {
-            x: 1.0,
-            y: 0.302,
-            z: 0.427,
-        }; // 0xff4d6d
-        const HI: Vec3 = Vec3 {
-            x: 1.0,
-            y: 0.502,
-            z: 0.596,
-        }; // 0xff8098
-        const STEM: Vec3 = Vec3 {
-            x: 0.42,
-            y: 0.247,
-            z: 0.114,
-        }; // 0x6b3f1d
-        const LEAF: Vec3 = Vec3 {
-            x: 0.239,
-            y: 0.863,
-            z: 0.592,
-        }; // 0x3ddc97
-        let tri = |pts: [[f32; 2]; 3], c: Vec3, v: &mut Vec<FlatVert>| {
-            for p in pts {
-                v.push(FlatVert {
-                    pos: [p[0], p[1]],
-                    col: [c.x, c.y, c.z, 1.0],
-                });
-            }
-        };
-        // Body: a slightly egg-shaped fan (wider at the bottom).
-        for i in 0..24 {
-            let a0 = i as f32 / 24.0 * std::f32::consts::TAU;
-            let a1 = (i + 1) as f32 / 24.0 * std::f32::consts::TAU;
-            let (s0, c0) = a0.sin_cos();
-            let (s1, c1) = a1.sin_cos();
-            let r0 = 1.0 - 0.12 * s0;
-            let r1 = 1.0 - 0.12 * s1;
-            tri(
-                [
-                    [0.0, -0.15],
-                    [c0 * r0, -0.15 + s0 * r0],
-                    [c1 * r1, -0.15 + s1 * r1],
-                ],
-                RED,
-                &mut apple_verts,
-            );
-        }
-        // Highlight spot, upper left.
-        for i in 0..12 {
-            let a0 = i as f32 / 12.0 * std::f32::consts::TAU;
-            let a1 = (i + 1) as f32 / 12.0 * std::f32::consts::TAU;
-            let (s0, c0) = a0.sin_cos();
-            let (s1, c1) = a1.sin_cos();
-            tri(
-                [
-                    [-0.42, 0.35],
-                    [-0.42 + c0 * 0.24, 0.35 + s0 * 0.24],
-                    [-0.42 + c1 * 0.24, 0.35 + s1 * 0.24],
-                ],
-                HI,
-                &mut apple_verts,
-            );
-        }
-        // Stem.
-        tri(
-            [[0.0, 0.78], [0.09, 1.05], [-0.09, 1.05]],
-            STEM,
-            &mut apple_verts,
-        );
-        tri(
-            [[0.0, 0.78], [0.14, 0.82], [0.09, 1.05]],
-            STEM,
-            &mut apple_verts,
-        );
-        // Leaf, tilted beside the stem.
-        tri(
-            [[0.16, 1.02], [0.62, 1.06], [0.30, 1.22]],
-            LEAF,
-            &mut apple_verts,
-        );
-        tri(
-            [[0.16, 1.02], [0.44, 0.92], [0.62, 1.06]],
-            LEAF,
-            &mut apple_verts,
-        );
-
         Self {
-            shadow_verts,
-            apple_verts,
+            shadow_verts: build_shadow(),
+            apple_verts: build_apple(),
             sparks: (0..SPARK_N).map(|_| Spark::default()).collect(),
             spark_scratch: Vec::with_capacity(SPARK_N * 6),
             shown: V::Idle,
@@ -354,7 +348,7 @@ impl Pet {
                 s.life = 0.6 + rnd * 0.3;
                 s.x = self.w * 0.5 + (self.rng.next_f32() - 0.5) * 40.0;
                 s.y = pet_head_top(self.h) + 30.0 + (self.rng.next_f32() - 0.5) * 40.0;
-                let a = self.rng.next_f32() * std::f32::consts::TAU;
+                let a = self.rng.next_f32() * TAU;
                 let sp = 60.0 + self.rng.next_f32() * 160.0;
                 s.vx = a.cos() * sp;
                 s.vy = a.sin() * sp - 80.0;
@@ -381,9 +375,9 @@ impl Pet {
     /// All-quests-done celebration.
     pub fn win(&mut self, t: f32) {
         self.cameo(V::Party, V::Fed, 2200.0, t);
-        self.burst(20, 0xff4d6d);
-        self.burst(20, 0x3ddc97);
-        self.burst(20, 0xffbd2e);
+        for col in [0xff4d6d, 0x3ddc97, 0xffbd2e] {
+            self.burst(20, col);
+        }
     }
 
     /// A pat on the head (quick click, not a drag).
@@ -524,16 +518,7 @@ impl Pet {
             u0 + 1.0 / SPR_COLS as f32 - eu,
             v0 + 1.0 / SPR_ROWS as f32 - ev,
         ];
-        gfx.draw_sprite(
-            model,
-            uv,
-            Vec4 {
-                r: 1.0,
-                g: 1.0,
-                b: 1.0,
-                a: 1.0,
-            },
-        );
+        gfx.draw_sprite(model, uv);
 
         // --- The apple ----------------------------------------------------------
         if self.feed_state != 0 {
@@ -546,9 +531,9 @@ impl Pet {
                 let ease = 1.0 - (1.0 - p).powi(3);
                 let sx0 = cx + 40.0;
                 let sy0 = feet_y + 24.0;
-                ax = sx0 + (mouth_x - sx0) * ease + (p * std::f32::consts::PI).sin() * 14.0;
+                ax = sx0 + (mouth_x - sx0) * ease + (p * PI).sin() * 14.0;
                 ay = sy0 + (mouth_y - sy0) * ease;
-                arot = (p * std::f32::consts::TAU).sin() * 0.4;
+                arot = (p * TAU).sin() * 0.4;
                 ascale = 1.0;
             } else {
                 ax = mouth_x;
@@ -590,7 +575,7 @@ impl Pet {
                 self.spark_scratch.push(FlatVert { pos: [x0, y1], col });
             }
         }
-        gfx.draw_flat(&self.spark_scratch, crate::math::m4_identity());
+        gfx.draw_flat(&self.spark_scratch, m4_identity());
 
         // --- zZz while dozing -----------------------------------------------------
         if self.shown == V::Doze {
@@ -598,7 +583,7 @@ impl Pet {
             const ZC: [char; 3] = ['z', 'Z', 'Z'];
             for (i, &g) in ZC.iter().enumerate() {
                 let p = (t * 0.22 + i as f32 * 0.33).fract();
-                let a = (p * std::f32::consts::PI).sin() * 0.8;
+                let a = (p * PI).sin() * 0.8;
                 let gs = g.to_string();
                 font.draw(
                     gfx,
