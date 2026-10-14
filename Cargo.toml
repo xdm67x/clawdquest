@@ -1,0 +1,30 @@
+[package]
+name = "clawdquest"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Clawd Pet — a desktop pet with a quest card, on your macOS desktop"
+
+[workspace]
+members = ["xtask"]
+
+[dependencies]
+winit = "0.30"
+wgpu = "30"
+pollster = "0.4"
+cpal = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+
+[[bin]]
+name = "clawdquest"
+path = "src/main.rs"
+
+[profile.release]
+# small binaries for the .app bundle
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

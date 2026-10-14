@@ -3,26 +3,27 @@
 ## Getting started
 
 ```sh
-brew install sdl3
-make test   # run the save-file tests
-make        # build the game
+cargo test    # run the save-file tests
+cargo build   # build the game
 ```
 
-Run the game binary directly with `./build/clawdquest`.
+Run the game binary directly with `./target/debug/clawdquest`, or `cargo run`.
+Building requires only a Rust toolchain (`rustup`; no system dependencies —
+wgpu links Metal, cpal links CoreAudio).
 
 ## Commands
 
-| Command           | What it does                                            |
-| ----------------- | ------------------------------------------------------- |
-| `make`           | Compile the game to `build/clawdquest`                 |
-| `make app`       | Bundle `dist/ClawdQuest.app` (icon, SDL3, codesigning)  |
-| `make test`      | Build and run the save-file test suite                  |
-| `make clean`     | Delete `build/`                                          |
-| `make font`      | Regenerate `src/font_atlas.h` (needs Homebrew `freetype`) |
-| `make icon`      | Regenerate `build/AppIcon.icns` (needs `swift`)          |
+| Command           | What it does                                         |
+| ----------------- | ---------------------------------------------------- |
+| `cargo build`     | Compile the game to `target/debug/clawdquest`        |
+| `cargo run`       | Build and launch the game                            |
+| `cargo test`      | Run the save-file test suite                         |
+| `cargo xtask app` | Bundle `dist/ClawdQuest.app` (icon, codesigning)     |
+| `cargo xtask dmg` | Bundle, then package a macOS arm64 DMG               |
+| `cargo clean`     | Delete `target/`                                     |
 
-Before submitting a change, `make test` must pass and `make app` must produce
-a bundle that launches.
+Before submitting a change, `cargo test` must pass and `cargo xtask app` must
+produce a bundle that launches.
 
 ## Commit messages
 
@@ -43,7 +44,7 @@ Types:
 - `feat`: a new feature
 - `fix`: a bug fix
 - `docs`: documentation only (README, comments)
-- `refactor`: code change that neither fixes nor adds anything
+- `refactor`: code change that neither fixes a bug nor adds anything
 - `perf`: change that improves performance
 - `test`: adding or updating tests
 - `build`: build system or external dependency changes
