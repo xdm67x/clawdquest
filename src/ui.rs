@@ -7,7 +7,7 @@
 use crate::audio::Audio;
 use crate::font::Font;
 use crate::fx::FxSink;
-use crate::game::{Game, fmt_mmss, fmt_time_h, lvl, lvl_start, title_of};
+use crate::game::{Game, Quest, fmt_mmss, fmt_time_h, lvl, lvl_start, title_of};
 use crate::gfx::Gfx;
 use crate::math::{Rect, Vec4, hsv, m4_identity};
 use crate::pet::Pet;
@@ -69,6 +69,38 @@ struct RowHit {
     cb: Rect,   // checkbox rect
     txt: Rect,  // text rect
     xbtn: Rect, // delete rect
+}
+
+/// Card geometry in points (top-left + size).
+#[derive(Clone, Copy)]
+struct Card {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl Card {
+    /// Left edge of the inner content box.
+    fn ix(&self) -> f32 {
+        self.x + 14.0
+    }
+    /// Width of the inner content box.
+    fn iw(&self) -> f32 {
+        self.w - 28.0
+    }
+    /// Top of the add bar (docked to the card bottom).
+    fn add_y(&self) -> f32 {
+        self.y + self.h - 14.0 - 32.0
+    }
+}
+
+/// Quest indices, open quests first and done quests last (stable).
+fn order_quests(quests: &[Quest]) -> Vec<usize> {
+    let mut ord = Vec::with_capacity(quests.len());
+    ord.extend((0..quests.len()).filter(|&i| !quests[i].done));
+    ord.extend((0..quests.len()).filter(|&i| quests[i].done));
+    ord
 }
 
 /// Wires game.rs's effects to this card + the pet + the audio sink (in C,
@@ -197,29 +229,22 @@ impl Ui {
     }
 
     pub fn on_card(&self, x: f32, y: f32) -> bool {
-        self.panel_open
-            && x >= self.card_rect.x
-            && x <= self.card_rect.x + self.card_rect.w
-            && y >= self.card_rect.y
-            && y <= self.card_rect.y + self.card_rect.h
+        self.panel_open && Self::in_rect(&self.card_rect, x, y)
     }
 
-    /// Floating +XP popup, anchored over the pet (x/y < 0 = defaults).
+    /// Floating +XP popup, anchored where the quest was completed.
     pub fn pop(&mut self, text: &str, x: f32, y: f32, t: f32) {
-        let text = text.to_string();
-        // The x<0/y<0 fallbacks center over the pet (callers always pass real
-        // coordinates).
-        let x = if x < 0.0 { (self.w - 120.0) * 0.5 } else { x };
-        let y = if y < 0.0 {
-            crate::app::pet_head_top(self.h) - 8.0
-        } else {
-            y
+        let pop = Pop {
+            text: text.to_string(),
+            x,
+            y,
+            t0: t,
         };
         if self.pops.len() < MAXPOP {
-            self.pops.push(Pop { text, x, y, t0: t });
+            self.pops.push(pop);
         } else {
             let i = (self.rng.next_f32() * MAXPOP as f32) as usize % MAXPOP;
-            self.pops[i] = Pop { text, x, y, t0: t };
+            self.pops[i] = pop;
         }
     }
 
@@ -269,7 +294,8 @@ impl Ui {
             Submit,
             Close,
         }
-        // Find what was hit: checkbox, delete x, then text row.
+        // Find what was hit: checkbox, delete x, then text row. Rows never
+        // overlap, so a single pass matches the original per-band priority.
         let mut action = None;
         for r in &self.rows {
             if Self::in_rect(&r.cb, x, y) {
@@ -278,23 +304,13 @@ impl Ui {
                 } else {
                     Action::Complete(r.qi)
                 });
+            } else if Self::in_rect(&r.xbtn, x, y) {
+                action = Some(Action::Delete(r.qi));
+            } else if Self::in_rect(&r.txt, x, y) {
+                action = Some(Action::Toggle(r.qi));
+            }
+            if action.is_some() {
                 break;
-            }
-        }
-        if action.is_none() {
-            for r in &self.rows {
-                if Self::in_rect(&r.xbtn, x, y) {
-                    action = Some(Action::Delete(r.qi));
-                    break;
-                }
-            }
-        }
-        if action.is_none() {
-            for r in &self.rows {
-                if Self::in_rect(&r.txt, x, y) {
-                    action = Some(Action::Toggle(r.qi));
-                    break;
-                }
             }
         }
         if action.is_none() {
@@ -434,25 +450,33 @@ impl Ui {
     }
 
     fn panel_frame(&mut self, gfx: &mut Gfx, font: &mut Font, game: &Game, t: f32) {
-        let mut cw = 300.0;
-        if cw > self.w - 20.0 {
-            cw = self.w - 20.0;
-        }
-        let cx = (self.w - cw) * 0.5;
-        let cy = 10.0;
-        let ch = 274.0;
-        self.card_rect = Rect {
-            x: cx,
-            y: cy,
+        let cw = 300.0_f32.min(self.w - 20.0);
+        let card = Card {
+            x: (self.w - cw) * 0.5,
+            y: 10.0,
             w: cw,
-            h: ch,
+            h: 274.0,
         };
-        gfx.draw_rrect(cx, cy, cw, ch, 18.0, C_GLASS, C_NONE, 0.0, C_LINE, 1.0);
+        self.card_rect = Rect {
+            x: card.x,
+            y: card.y,
+            w: card.w,
+            h: card.h,
+        };
+        gfx.draw_rrect(
+            card.x, card.y, card.w, card.h, 18.0, C_GLASS, C_NONE, 0.0, C_LINE, 1.0,
+        );
 
-        let ix = cx + 14.0;
-        let iw = cw - 28.0; // inner box
+        self.draw_header(gfx, font, game, &card);
+        self.draw_xp_bar(gfx, font, game, &card);
+        self.draw_stats(gfx, font, game, &card);
+        self.draw_quests(gfx, font, game, &card);
+        self.draw_add_bar(gfx, font, &card, t);
+    }
 
-        // Header: level badge, name, rank.
+    /// Header: level badge, name, rank, and the close button.
+    fn draw_header(&mut self, gfx: &mut Gfx, font: &mut Font, game: &Game, c: &Card) {
+        let (ix, cy) = (c.ix(), c.y);
         gfx.draw_rrect(
             ix,
             cy + 12.0,
@@ -465,63 +489,60 @@ impl Ui {
             C_NONE,
             0.0,
         );
-        {
-            let n = format!("{}", lvl(game.s.xp));
-            let w = font.measure(&n, 13.0);
-            font.draw(gfx, &n, ix + 15.0 - w / 2.0, cy + 32.0, 13.0, C_WHITE, true);
-        }
+        let l = lvl(game.s.xp);
+        let n = l.to_string();
+        let nw = font.measure(&n, 13.0);
+        font.draw(
+            gfx,
+            &n,
+            ix + 15.0 - nw / 2.0,
+            cy + 32.0,
+            13.0,
+            C_WHITE,
+            true,
+        );
         font.draw(gfx, "Clawd Quest", ix + 40.0, cy + 25.0, 14.0, C_TXT, true);
-        {
-            let s = format!(
-                "Lv {} \u{2022} {}",
-                lvl(game.s.xp),
-                title_of(lvl(game.s.xp))
-            );
-            font.draw(gfx, &s, ix + 40.0, cy + 41.0, 10.0, C_DIM, false);
-        }
+        let s = format!("Lv {l} \u{2022} {}", title_of(l));
+        font.draw(gfx, &s, ix + 40.0, cy + 41.0, 10.0, C_DIM, false);
 
         // Close button, top-right.
         let qb = 22.0;
         self.close_btn = Rect {
-            x: cx + cw - 14.0 - qb,
+            x: c.x + c.w - 14.0 - qb,
             y: cy + 15.0,
             w: qb,
             h: qb,
         };
-        let (mx, my) = self.mouse;
-        let q_hover = Self::in_rect(&self.close_btn, mx, my);
+        let hover = Self::in_rect(&self.close_btn, self.mouse.0, self.mouse.1);
         gfx.draw_rrect(
             self.close_btn.x,
             self.close_btn.y,
-            self.close_btn.w,
-            self.close_btn.h,
+            qb,
+            qb,
             8.0,
-            rgba(0xffffff, if q_hover { 0.18 } else { 0.07 }),
+            rgba(0xffffff, if hover { 0.18 } else { 0.07 }),
             C_NONE,
             0.0,
             rgba(0xffffff, 0.16),
             1.0,
         );
-        {
-            let x = "\u{d7}"; // × (U+00D7)
-            font.draw(
-                gfx,
-                x,
-                self.close_btn.x + (qb - font.measure(x, 12.0)) * 0.5,
-                self.close_btn.y + 15.0,
-                12.0,
-                if q_hover { C_WHITE } else { C_TXT },
-                false,
-            );
-        }
+        let x = "\u{d7}"; // × (U+00D7)
+        font.draw(
+            gfx,
+            x,
+            self.close_btn.x + (qb - font.measure(x, 12.0)) * 0.5,
+            self.close_btn.y + 15.0,
+            12.0,
+            if hover { C_WHITE } else { C_TXT },
+            false,
+        );
+    }
 
-        // XP bar.
+    /// XP bar and the "n / m XP" readout.
+    fn draw_xp_bar(&mut self, gfx: &mut Gfx, font: &mut Font, game: &Game, c: &Card) {
         let l = lvl(game.s.xp);
-        let a = lvl_start(l);
-        let b = lvl_start(l + 1);
-        let bx = ix;
-        let bw = iw - 92.0;
-        let by = cy + 52.0;
+        let (a, b) = (lvl_start(l), lvl_start(l + 1));
+        let (bx, bw, by) = (c.ix(), c.iw() - 92.0, c.y + 52.0);
         gfx.draw_rrect(
             bx,
             by,
@@ -536,74 +557,53 @@ impl Ui {
         );
         let frac = (game.s.xp - a) as f32 / (b - a) as f32;
         if frac > 0.0 {
-            let mut fw = bw * frac;
-            if fw < 7.0 {
-                fw = 7.0;
-            }
-            if frac > 1.0 {
-                fw = bw;
-            }
+            let fw = if frac > 1.0 { bw } else { (bw * frac).max(7.0) };
             gfx.draw_rrect(bx, by, fw, 7.0, 3.5, C_XP, C_XP2, 1.0, C_NONE, 0.0);
         }
-        {
-            let s = format!("{} / {} XP", game.s.xp - a, b - a);
-            font.draw(
-                gfx,
-                &s,
-                cx + cw - 14.0 - font.measure(&s, 9.0),
-                by + 7.5,
-                9.0,
-                C_DIM,
-                false,
-            );
-        }
+        let s = format!("{} / {} XP", game.s.xp - a, b - a);
+        font.draw(
+            gfx,
+            &s,
+            c.x + c.w - 14.0 - font.measure(&s, 9.0),
+            by + 7.5,
+            9.0,
+            C_DIM,
+            false,
+        );
+    }
 
-        // Stats line.
-        {
-            let s = format!(
-                "{}-day streak \u{2022} {} done \u{2022} {} focused",
-                game.s.streak,
-                game.s.total,
-                fmt_time_h(game.s.time)
-            );
-            font.draw(gfx, &s, ix, cy + 78.0, 10.0, C_DIM, false);
-        }
+    /// The one-line stats summary.
+    fn draw_stats(&mut self, gfx: &mut Gfx, font: &mut Font, game: &Game, c: &Card) {
+        let s = format!(
+            "{}-day streak \u{2022} {} done \u{2022} {} focused",
+            game.s.streak,
+            game.s.total,
+            fmt_time_h(game.s.time)
+        );
+        font.draw(gfx, &s, c.ix(), c.y + 78.0, 10.0, C_DIM, false);
+    }
 
-        // Quest band (scrollable). The add bar is docked to the card bottom.
-        let add_y = cy + ch - 14.0 - 32.0;
+    /// The scrollable quest band and the empty-board notice.
+    fn draw_quests(&mut self, gfx: &mut Gfx, font: &mut Font, game: &Game, c: &Card) {
         let row_h = 30.0;
         let gap = 6.0;
+        let top = c.y + 92.0;
         self.band_rect = Rect {
-            x: ix,
-            y: cy + 92.0,
-            w: iw,
-            h: add_y - 8.0 - (cy + 92.0),
+            x: c.ix(),
+            y: top,
+            w: c.iw(),
+            h: c.add_y() - 8.0 - top,
         };
 
-        // Sort done quests to the bottom (stable).
-        let mut ord: Vec<usize> = Vec::with_capacity(game.s.quests.len());
-        for (i, q) in game.s.quests.iter().enumerate() {
-            if !q.done {
-                ord.push(i);
-            }
-        }
-        for (i, q) in game.s.quests.iter().enumerate() {
-            if q.done {
-                ord.push(i);
-            }
-        }
-
+        // Open quests first, done quests last (stable).
+        let ord = order_quests(&game.s.quests);
         let m = ord.len();
         let content_h = if m > 0 {
             m as f32 * (row_h + gap) - gap
         } else {
             0.0
         };
-        let max_scroll = if content_h > self.band_rect.h {
-            content_h - self.band_rect.h
-        } else {
-            0.0
-        };
+        let max_scroll = (content_h - self.band_rect.h).max(0.0);
         self.target_scroll = self.target_scroll.clamp(0.0, max_scroll);
 
         self.rows.clear();
@@ -614,185 +614,210 @@ impl Ui {
                 if ry + row_h < self.band_rect.y || ry > self.band_rect.y + self.band_rect.h {
                     continue;
                 }
-                let q = &game.s.quests[qi];
-                let hovered = mx >= self.band_rect.x
-                    && mx <= self.band_rect.x + self.band_rect.w
-                    && my >= ry
-                    && my <= ry + row_h;
-                let is_act = q.id == game.s.active;
-                let is_run = is_act && game.s.running;
-
-                // Row background.
-                let mut bg = rgba(0xffffff, 0.04);
-                let mut border = C_NONE;
-                if is_act {
-                    bg = rgba(0x8b5cf6, 0.20);
-                    border = C_ACC2;
-                } else if hovered {
-                    bg = rgba(0xffffff, 0.08);
-                }
-                gfx.draw_rrect(
-                    self.band_rect.x,
-                    ry,
-                    self.band_rect.w,
-                    row_h,
-                    10.0,
-                    bg,
-                    C_NONE,
-                    0.0,
-                    border,
-                    1.0,
-                );
-
-                // Checkbox.
-                let ccx = self.band_rect.x + 5.0;
-                let ccy = ry + (row_h - 18.0) / 2.0;
-                gfx.draw_rrect(
-                    ccx,
-                    ccy,
-                    18.0,
-                    18.0,
-                    6.0,
-                    if q.done { C_OK } else { C_NONE },
-                    C_NONE,
-                    0.0,
-                    if q.done { C_OK } else { rgba(0xffffff, 0.27) },
-                    2.0,
-                );
-                if q.done {
-                    let g = "\u{2713}"; // checkmark
-                    let gw = font.measure(g, 11.0);
-                    font.draw(
-                        gfx,
-                        g,
-                        ccx + 9.0 - gw / 2.0,
-                        ccy + 13.5,
-                        11.0,
-                        rgba(0x06281b, 1.0),
-                        true,
-                    );
-                }
-
-                // Quest text (with ellipsis; strikethrough when done).
-                let tx = ccx + 26.0;
-                let maxw = self.band_rect.w - 26.0 - 26.0 - 56.0;
-                let shown = self.fit_text(font, &q.text, 12.0, maxw);
-                let tcol = if q.done { mul(C_TXT, 0.55) } else { C_TXT };
-                font.draw(gfx, &shown, tx, ry + row_h / 2.0 + 4.0, 12.0, tcol, false);
-                if q.done {
-                    let tw = font.measure(&shown, 12.0);
-                    gfx.draw_rrect(
-                        tx,
-                        ry + row_h / 2.0 - 2.0,
-                        tw,
-                        1.5,
-                        1.0,
-                        tcol,
-                        C_NONE,
-                        0.0,
-                        C_NONE,
-                        0.0,
-                    );
-                }
-
-                // Chronometer chip.
-                if is_run || q.secs > 0 {
-                    let s = fmt_mmss(q.secs);
-                    let sw = font.measure(&s, 10.0) + 12.0;
-                    let sx = self.band_rect.x + self.band_rect.w - 26.0 - sw;
-                    if is_run {
-                        gfx.draw_rrect(
-                            sx,
-                            ry + (row_h - 16.0) / 2.0,
-                            sw,
-                            16.0,
-                            8.0,
-                            rgba(0x8b5cf6, 0.13),
-                            C_NONE,
-                            0.0,
-                            C_NONE,
-                            0.0,
-                        );
-                        font.draw(
-                            gfx,
-                            &s,
-                            sx + 6.0,
-                            ry + row_h / 2.0 + 3.5,
-                            10.0,
-                            C_ACC2,
-                            true,
-                        );
-                    } else {
-                        font.draw(
-                            gfx,
-                            &s,
-                            sx + 6.0,
-                            ry + row_h / 2.0 + 3.5,
-                            10.0,
-                            C_DIM,
-                            false,
-                        );
-                    }
-                }
-
-                // Delete button, visible on hover.
-                let xx = self.band_rect.x + self.band_rect.w - 24.0;
-                if hovered {
-                    let dm = "\u{d7}";
-                    font.draw(
-                        gfx,
-                        dm,
-                        xx + (26.0 - font.measure(dm, 12.0)) * 0.5,
-                        ry + row_h / 2.0 + 4.0,
-                        12.0,
-                        C_DIM,
-                        false,
-                    );
-                }
-                self.rows.push(RowHit {
+                let hit = self.draw_quest_row(
+                    gfx,
+                    font,
+                    &game.s.quests[qi],
                     qi,
-                    cb: Rect {
-                        x: ccx,
-                        y: ccy,
-                        w: 18.0,
-                        h: 18.0,
-                    },
-                    txt: Rect {
-                        x: tx,
-                        y: ry,
-                        w: maxw,
-                        h: row_h,
-                    },
-                    xbtn: Rect {
-                        x: xx,
-                        y: ry,
-                        w: 26.0,
-                        h: row_h,
-                    },
-                });
+                    ry,
+                    row_h,
+                    game.s.active,
+                    game.s.running,
+                );
+                self.rows.push(hit);
             }
             gfx.set_scissor(None);
         }
 
-        // Empty board notice.
         if game.s.quests.is_empty() {
             let l1 = "No quests \u{2022} add one below.";
             font.draw(
                 gfx,
                 l1,
-                cx + (cw - font.measure(l1, 11.0)) * 0.5,
+                c.x + (c.w - font.measure(l1, 11.0)) * 0.5,
                 self.band_rect.y + self.band_rect.h * 0.5 + 4.0,
                 11.0,
                 C_DIM,
                 false,
             );
         }
+    }
 
-        // --- Add bar -------------------------------------------------------------
+    /// One quest row: background, checkbox, text, timer chip, delete button.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_quest_row(
+        &self,
+        gfx: &mut Gfx,
+        font: &mut Font,
+        q: &Quest,
+        qi: usize,
+        ry: f32,
+        row_h: f32,
+        active: i32,
+        running: bool,
+    ) -> RowHit {
+        let band = self.band_rect;
+        let (mx, my) = self.mouse;
+        let hovered = mx >= band.x && mx <= band.x + band.w && my >= ry && my <= ry + row_h;
+        let is_act = q.id == active;
+        let is_run = is_act && running;
+
+        // Row background.
+        let (bg, border) = if is_act {
+            (rgba(0x8b5cf6, 0.20), C_ACC2)
+        } else if hovered {
+            (rgba(0xffffff, 0.08), C_NONE)
+        } else {
+            (rgba(0xffffff, 0.04), C_NONE)
+        };
+        gfx.draw_rrect(
+            band.x, ry, band.w, row_h, 10.0, bg, C_NONE, 0.0, border, 1.0,
+        );
+
+        // Checkbox.
+        let ccx = band.x + 5.0;
+        let ccy = ry + (row_h - 18.0) / 2.0;
+        gfx.draw_rrect(
+            ccx,
+            ccy,
+            18.0,
+            18.0,
+            6.0,
+            if q.done { C_OK } else { C_NONE },
+            C_NONE,
+            0.0,
+            if q.done { C_OK } else { rgba(0xffffff, 0.27) },
+            2.0,
+        );
+        if q.done {
+            let g = "\u{2713}"; // checkmark
+            let gw = font.measure(g, 11.0);
+            font.draw(
+                gfx,
+                g,
+                ccx + 9.0 - gw / 2.0,
+                ccy + 13.5,
+                11.0,
+                rgba(0x06281b, 1.0),
+                true,
+            );
+        }
+
+        // Quest text (with ellipsis; strikethrough when done).
+        let tx = ccx + 26.0;
+        let maxw = band.w - 26.0 - 26.0 - 56.0;
+        let shown = self.fit_text(font, &q.text, 12.0, maxw);
+        let tcol = if q.done { mul(C_TXT, 0.55) } else { C_TXT };
+        font.draw(gfx, &shown, tx, ry + row_h / 2.0 + 4.0, 12.0, tcol, false);
+        if q.done {
+            let tw = font.measure(&shown, 12.0);
+            gfx.draw_rrect(
+                tx,
+                ry + row_h / 2.0 - 2.0,
+                tw,
+                1.5,
+                1.0,
+                tcol,
+                C_NONE,
+                0.0,
+                C_NONE,
+                0.0,
+            );
+        }
+
+        // Chronometer chip.
+        if is_run || q.secs > 0 {
+            let s = fmt_mmss(q.secs);
+            let sw = font.measure(&s, 10.0) + 12.0;
+            let sx = band.x + band.w - 26.0 - sw;
+            if is_run {
+                gfx.draw_rrect(
+                    sx,
+                    ry + (row_h - 16.0) / 2.0,
+                    sw,
+                    16.0,
+                    8.0,
+                    rgba(0x8b5cf6, 0.13),
+                    C_NONE,
+                    0.0,
+                    C_NONE,
+                    0.0,
+                );
+                font.draw(
+                    gfx,
+                    &s,
+                    sx + 6.0,
+                    ry + row_h / 2.0 + 3.5,
+                    10.0,
+                    C_ACC2,
+                    true,
+                );
+            } else {
+                font.draw(
+                    gfx,
+                    &s,
+                    sx + 6.0,
+                    ry + row_h / 2.0 + 3.5,
+                    10.0,
+                    C_DIM,
+                    false,
+                );
+            }
+        }
+
+        // Delete button, visible on hover.
+        let xx = band.x + band.w - 24.0;
+        if hovered {
+            let dm = "\u{d7}";
+            font.draw(
+                gfx,
+                dm,
+                xx + (26.0 - font.measure(dm, 12.0)) * 0.5,
+                ry + row_h / 2.0 + 4.0,
+                12.0,
+                C_DIM,
+                false,
+            );
+        }
+
+        RowHit {
+            qi,
+            cb: Rect {
+                x: ccx,
+                y: ccy,
+                w: 18.0,
+                h: 18.0,
+            },
+            txt: Rect {
+                x: tx,
+                y: ry,
+                w: maxw,
+                h: row_h,
+            },
+            xbtn: Rect {
+                x: xx,
+                y: ry,
+                w: 26.0,
+                h: row_h,
+            },
+        }
+    }
+
+    /// The add bar docked to the card bottom.
+    fn draw_add_bar(&mut self, gfx: &mut Gfx, font: &mut Font, c: &Card, t: f32) {
+        let (ix, iw, add_y) = (c.ix(), c.iw(), c.add_y());
+        let (mx, my) = self.mouse;
         gfx.draw_rrect(ix, add_y, iw, 32.0, 16.0, C_GLASS, C_NONE, 0.0, C_LINE, 1.0);
         if self.input_buf.is_empty() {
-            let ph = "Add a quest...";
-            font.draw(gfx, ph, ix + 12.0, add_y + 21.0, 12.0, C_DIM, false);
+            font.draw(
+                gfx,
+                "Add a quest...",
+                ix + 12.0,
+                add_y + 21.0,
+                12.0,
+                C_DIM,
+                false,
+            );
         } else {
             font.draw(
                 gfx,
@@ -804,7 +829,7 @@ impl Ui {
                 false,
             );
         }
-        if (t).fract() < 0.5 {
+        if t.fract() < 0.5 {
             let cx2 = ix + 12.0 + font.measure(&self.input_buf, 12.0);
             gfx.draw_rrect(
                 cx2,
@@ -826,12 +851,12 @@ impl Ui {
             w: ab_w,
             h: 24.0,
         };
-        let ab_hover = Self::in_rect(&self.add_btn, mx, my);
+        let hover = Self::in_rect(&self.add_btn, mx, my);
         gfx.draw_rrect(
             self.add_btn.x,
             self.add_btn.y,
-            self.add_btn.w,
-            self.add_btn.h,
+            ab_w,
+            24.0,
             12.0,
             C_ACC,
             C_ACC2,
@@ -839,12 +864,12 @@ impl Ui {
             C_NONE,
             0.0,
         );
-        if ab_hover {
+        if hover {
             gfx.draw_rrect(
                 self.add_btn.x,
                 self.add_btn.y,
-                self.add_btn.w,
-                self.add_btn.h,
+                ab_w,
+                24.0,
                 12.0,
                 rgba(0xffffff, 0.12),
                 C_NONE,
@@ -857,7 +882,7 @@ impl Ui {
         font.draw(
             gfx,
             add,
-            self.add_btn.x + (self.add_btn.w - font.measure(add, 12.0)) * 0.5,
+            self.add_btn.x + (ab_w - font.measure(add, 12.0)) * 0.5,
             self.add_btn.y + 15.5,
             12.0,
             C_WHITE,
