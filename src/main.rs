@@ -123,10 +123,9 @@ impl App {
     // --- window placement -------------------------------------------------------
 
     fn pos_save(&self) {
-        let Some(home) = std::env::var_os("HOME") else {
+        let Some(dir) = state_dir() else {
             return;
         };
-        let dir = std::path::Path::new(&home).join(".clawdquest");
         let _ = std::fs::create_dir_all(&dir);
         // Stored in points.
         let scale = self.window.scale_factor() as f32;
@@ -138,6 +137,13 @@ impl App {
             );
             let _ = std::fs::write(dir.join("pet.pos"), out);
         }
+    }
+
+    /// Persist the session and leave (save + placement, then quit).
+    fn quit(&mut self, event_loop: &ActiveEventLoop) {
+        self.game.save();
+        self.pos_save();
+        event_loop.exit();
     }
 
     fn set_panel(&mut self, open: bool) {
@@ -184,10 +190,7 @@ impl App {
             }
         }
         if self.ui.should_quit() {
-            // Persist the session's accumulated focus time and the pet's spot.
-            self.game.save();
-            self.pos_save();
-            event_loop.exit();
+            self.quit(event_loop);
             return;
         }
 
@@ -263,11 +266,7 @@ impl winit::application::ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         let scale = self.window.scale_factor();
         match event {
-            WindowEvent::CloseRequested => {
-                self.game.save();
-                self.pos_save();
-                event_loop.exit();
-            }
+            WindowEvent::CloseRequested => self.quit(event_loop),
             WindowEvent::CursorMoved { position, .. } => {
                 let pos: LogicalPosition<f32> = position.to_logical(scale);
                 let (x, y) = (pos.x, pos.y);
@@ -389,6 +388,11 @@ impl winit::application::ApplicationHandler for App {
 
 // --- window placement helpers ---------------------------------------------------
 
+/// Clawd's state directory (`~/.clawdquest`), if HOME is known.
+fn state_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".clawdquest"))
+}
+
 /// The monitor containing a point (physical px), or the primary monitor.
 fn monitor_at(monitors: &[Monitor], x: i32, y: i32) -> Option<&Monitor> {
     monitors
@@ -422,9 +426,7 @@ fn pos_clamp(monitors: &[Monitor], window: &Window, x: &mut i32, y: &mut i32) {
 
 /// Read the saved placement (points) -> physical px.
 fn pos_load(monitors: &[Monitor], window: &Window, scale: f64) -> Option<(i32, i32)> {
-    let home = std::env::var_os("HOME")?;
-    let text =
-        std::fs::read_to_string(std::path::Path::new(&home).join(".clawdquest/pet.pos")).ok()?;
+    let text = std::fs::read_to_string(state_dir()?.join("pet.pos")).ok()?;
     let mut it = text.split_whitespace();
     let x: i32 = it.next()?.parse().ok()?;
     let y: i32 = it.next()?.parse().ok()?;

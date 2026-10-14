@@ -90,6 +90,70 @@ struct SaveQuest {
     secs: i64,
 }
 
+impl From<SaveQuest> for Quest {
+    fn from(q: SaveQuest) -> Self {
+        Quest {
+            id: q.id,
+            text: q.text,
+            done: q.done,
+            secs: q.secs,
+        }
+    }
+}
+
+impl From<&Quest> for SaveQuest {
+    fn from(q: &Quest) -> Self {
+        SaveQuest {
+            id: q.id,
+            text: q.text.clone(),
+            done: q.done,
+            secs: q.secs,
+        }
+    }
+}
+
+impl From<Save> for State {
+    fn from(save: Save) -> Self {
+        State {
+            v: save.v,
+            xp: save.xp,
+            total: save.total,
+            time: save.time,
+            streak: save.streak,
+            last: save.last,
+            badges: save.badges.into_iter().take(MAX_BADGES).collect(),
+            quests: save
+                .quests
+                .into_iter()
+                .take(MAX_QUESTS)
+                .map(Quest::from)
+                .collect(),
+            bosses: save.bosses,
+            foe: save.foe,
+            next_id: save.next_id,
+            ..State::default()
+        }
+    }
+}
+
+impl From<&State> for Save {
+    fn from(s: &State) -> Self {
+        Save {
+            v: s.v,
+            xp: s.xp,
+            total: s.total,
+            time: s.time,
+            streak: s.streak,
+            bosses: s.bosses,
+            foe: s.foe,
+            next_id: s.next_id,
+            last: s.last.clone(),
+            badges: s.badges.clone(),
+            quests: s.quests.iter().map(SaveQuest::from).collect(),
+        }
+    }
+}
+
 fn de_done<'de, D>(d: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -211,38 +275,9 @@ impl Game {
         }
         if let Ok(text) = std::fs::read_to_string(&path) {
             match serde_json::from_str::<Save>(&text) {
-                Ok(save) => self.apply_save(save),
+                Ok(save) => self.s = State::from(save),
                 Err(e) => eprintln!("clawdquest: ignoring save {path:?}: {e}"), // malformed; keep defaults
             }
-        }
-    }
-
-    fn apply_save(&mut self, save: Save) {
-        let s = &mut self.s;
-        s.v = save.v;
-        s.xp = save.xp;
-        s.total = save.total;
-        s.time = save.time;
-        s.streak = save.streak;
-        s.bosses = save.bosses;
-        s.foe = save.foe;
-        s.next_id = save.next_id;
-        s.last = save.last;
-        for b in save.badges {
-            if s.badges.len() < MAX_BADGES {
-                s.badges.push(b);
-            }
-        }
-        for q in save.quests {
-            if s.quests.len() >= MAX_QUESTS {
-                break;
-            }
-            s.quests.push(Quest {
-                id: q.id,
-                text: q.text,
-                done: q.done,
-                secs: q.secs,
-            });
         }
     }
 
@@ -250,29 +285,7 @@ impl Game {
         let Some(path) = self.store_path() else {
             return;
         };
-        let s = &self.s;
-        let store = Save {
-            v: s.v,
-            xp: s.xp,
-            total: s.total,
-            time: s.time,
-            streak: s.streak,
-            bosses: s.bosses,
-            foe: s.foe,
-            next_id: s.next_id,
-            last: s.last.clone(),
-            badges: s.badges.clone(),
-            quests: s
-                .quests
-                .iter()
-                .map(|q| SaveQuest {
-                    id: q.id,
-                    text: q.text.clone(),
-                    done: q.done,
-                    secs: q.secs,
-                })
-                .collect(),
-        };
+        let store = Save::from(&self.s);
         if let Ok(out) = serde_json::to_string(&store) {
             if let Some(dir) = Path::new(&path).parent() {
                 let _ = std::fs::create_dir_all(dir);
