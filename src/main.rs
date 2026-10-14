@@ -24,7 +24,7 @@ use std::time::Instant;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use app::{PANEL_H, PANEL_W, PET_H, PET_W};
@@ -67,7 +67,8 @@ struct App {
     grab: (f32, f32), // cursor - window position, at grab (window points)
     press_pt: (f32, f32),
     press_t: Instant,
-    cursor: (f32, f32), // last cursor position (window points)
+    cursor: (f32, f32),   // last cursor position (window points)
+    mods: ModifiersState, // live modifier state, to reject shortcut keys as text
 
     save_pending: u32, // frames until the placement is persisted
     placed: bool,      // first resumed(): restore the pet's placement
@@ -111,6 +112,7 @@ impl App {
             press_pt: (0.0, 0.0),
             press_t: Instant::now(),
             cursor: (-1.0, -1.0),
+            mods: ModifiersState::empty(),
             save_pending: 0,
             placed: false,
         }
@@ -177,7 +179,7 @@ impl App {
 
     // --- one frame ----------------------------------------------------------------
 
-    fn frame(&mut self, event_loop: &ActiveEventLoop) {
+    fn frame(&mut self) {
         let scale = self.window.scale_factor();
         let inner = self.window.inner_size(); // physical
         let lw = inner.to_logical::<f32>(scale).width;
@@ -189,9 +191,8 @@ impl App {
                 self.pos_save();
             }
         }
-        if self.ui.should_quit() {
-            self.quit(event_loop);
-            return;
+        if self.ui.take_close_request() {
+            self.set_panel(false);
         }
 
         let now = Instant::now();
@@ -353,26 +354,38 @@ impl winit::application::ApplicationHandler for App {
                 self.ui.wheel(dy);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed
-                    && let PhysicalKey::Code(code) = event.physical_key
-                {
-                    let t = self.t();
-                    match code {
-                        KeyCode::Escape if self.panel => self.set_panel(false),
-                        KeyCode::Backspace if self.ui.panel_open() => self.ui.key(
-                            Key::Backspace,
-                            &mut self.game,
-                            &mut self.pet,
-                            &self.audio,
-                            t,
-                        ),
-                        KeyCode::Enter | KeyCode::NumpadEnter if self.ui.panel_open() => self
-                            .ui
-                            .key(Key::Enter, &mut self.game, &mut self.pet, &self.audio, t),
-                        _ => {}
+                if event.state == ElementState::Pressed {
+                    // Plain typing arrives as KeyboardInput text on macOS; only
+                    // real IME composition (marked text) comes through Ime.
+                    // Skip control/Cmd shortcuts so they don't type letters.
+                    if !self.mods.control_key()
+                        && !self.mods.super_key()
+                        && let Some(txt) = event.text.as_deref()
+                    {
+                        self.ui.text(txt);
+                    }
+                    if let PhysicalKey::Code(code) = event.physical_key {
+                        let t = self.t();
+                        match code {
+                            KeyCode::Escape if self.panel => self.set_panel(false),
+                            KeyCode::Backspace if self.ui.panel_open() => self.ui.key(
+                                Key::Backspace,
+                                &mut self.game,
+                                &mut self.pet,
+                                &self.audio,
+                                t,
+                            ),
+                            KeyCode::Enter | KeyCode::NumpadEnter if self.ui.panel_open() => self
+                                .ui
+                                .key(Key::Enter, &mut self.game, &mut self.pet, &self.audio, t),
+                            _ => {}
+                        }
                     }
                     self.pet.interact();
                 }
+            }
+            WindowEvent::ModifiersChanged(m) => {
+                self.mods = m.state();
             }
             WindowEvent::Ime(Ime::Commit(s)) => {
                 self.ui.text(&s);
@@ -381,8 +394,8 @@ impl winit::application::ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.frame(event_loop);
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        self.frame();
     }
 }
 

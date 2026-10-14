@@ -158,7 +158,7 @@ pub struct Ui {
     conf_scratch: Vec<crate::gfx::FlatVert>,
 
     panel_open: bool,
-    quit_req: bool,
+    close_req: bool,
     mouse: (f32, f32),
 
     // quest list scrolling: the target is authoritative
@@ -192,7 +192,7 @@ impl Ui {
             confetti: Vec::with_capacity(MAXCONF),
             conf_scratch: Vec::with_capacity(MAXCONF * 6),
             panel_open: false,
-            quit_req: false,
+            close_req: false,
             mouse: (-1.0, -1.0),
             target_scroll: 0.0,
             card_pressed: false,
@@ -216,8 +216,9 @@ impl Ui {
         self.panel_open
     }
 
-    pub fn should_quit(&self) -> bool {
-        self.quit_req
+    /// Consume a pending request to close the card (the × button).
+    pub fn take_close_request(&mut self) -> bool {
+        std::mem::take(&mut self.close_req)
     }
 
     pub fn set_panel(&mut self, open: bool) {
@@ -337,7 +338,7 @@ impl Ui {
                 game.toggle_timer(id);
             }
             Some(Action::Submit) => self.submit_input(game, pet, audio, t),
-            Some(Action::Close) => self.quit_req = true,
+            Some(Action::Close) => self.close_req = true,
             None => {}
         }
     }
@@ -1002,5 +1003,62 @@ impl Ui {
             }
             gfx.draw_flat(&self.conf_scratch, m4_identity());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_is_accepted_only_while_open() {
+        let mut ui = Ui::new();
+        ui.text("ignored");
+        assert_eq!(ui.input_buf, "");
+        ui.set_panel(true);
+        ui.text("hello ");
+        ui.text("world");
+        assert_eq!(ui.input_buf, "hello world");
+        ui.key(
+            Key::Backspace,
+            &mut Game::new(),
+            &mut Pet::new(),
+            &Audio::new(),
+            0.0,
+        );
+        assert_eq!(ui.input_buf, "hello worl");
+    }
+
+    #[test]
+    fn input_is_capped() {
+        let mut ui = Ui::new();
+        ui.set_panel(true);
+        ui.text(&"x".repeat(255));
+        assert_eq!(ui.input_buf.chars().count(), 255);
+        ui.text("y"); // would reach 256: rejected
+        assert_eq!(ui.input_buf.chars().count(), 255);
+        ui.text(&"z".repeat(300)); // a huge paste is rejected outright
+        assert_eq!(ui.input_buf.chars().count(), 255);
+    }
+
+    #[test]
+    fn close_request_is_consumed_once() {
+        let mut ui = Ui::new();
+        assert!(!ui.take_close_request());
+        ui.close_req = true;
+        assert!(ui.take_close_request());
+        assert!(!ui.take_close_request());
+    }
+
+    #[test]
+    fn order_quests_is_open_first_done_last() {
+        let q = |id: i32, done: bool| Quest {
+            id,
+            text: String::new(),
+            done,
+            secs: 0,
+        };
+        let qs = vec![q(1, false), q(2, true), q(3, false), q(4, true)];
+        assert_eq!(order_quests(&qs), vec![0, 2, 1, 3]);
     }
 }
